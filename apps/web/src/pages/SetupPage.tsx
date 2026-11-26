@@ -114,7 +114,7 @@ export function SetupPage({
           <input
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="https://tock.example.com"
+            placeholder="https://brega.example.com"
           />
         </label>
 
@@ -128,7 +128,7 @@ export function SetupPage({
 
   return (
     <form onSubmit={submit}>
-      <h2>Welcome — set up your tock instance</h2>
+      <h2>Welcome — set up your brega instance</h2>
       <p>
         No account exists yet, so this first account becomes the{" "}
         <strong>administrator</strong>. Everything is end-to-end encrypted; the

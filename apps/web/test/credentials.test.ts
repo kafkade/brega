@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryStore, SessionStorageStore } from "../src/lib/credentials";
 
 const sample = {
-  serverURL: "https://tock.example",
+  serverURL: "https://brega.example",
   email: "a@b.c",
   session: { bearer_token: "ab", channel_binding: "cd", expires_at: 1 },
 };

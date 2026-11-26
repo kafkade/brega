@@ -1,0 +1,66 @@
+[package]
+name = "brega-cli"
+description = "Command-line interface for brega — unified task / habit / time / focus engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[features]
+# Match architecture §4.3.3.
+default = ["tui", "completion"]
+tui = []
+completion = []
+
+[[bin]]
+name = "brega"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+brega-core = { workspace = true }
+brega-crypto = { workspace = true }
+brega-account = { workspace = true }
+brega-storage = { workspace = true }
+brega-parse = { workspace = true }
+brega-sync = { workspace = true }
+brega-import = { workspace = true }
+brega-export = { workspace = true }
+brega-caldav = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rusqlite = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+dirs = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+i18n-embed = { workspace = true }
+i18n-embed-fl = { workspace = true }
+rust-embed = { workspace = true }
+unic-langid = { workspace = true }
+keyring = { workspace = true }
+qrcode = { workspace = true }
+printpdf = { workspace = true }
+rpassword = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# brega-server is AGPL-3.0; used only as a dev-dependency for the
+# end-to-end multi-device sync acceptance test (it never links into the
+# distributed Apache-2.0 CLI binary). See ADR-006.
+brega-server = { workspace = true }

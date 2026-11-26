@@ -19,11 +19,11 @@
 
 <!-- Which part of the monorepo does this touch? -->
 
-- [ ] `crates/tock-core/` — Core library (domain model, crypto, storage traits)
-- [ ] `crates/tock-cli/` — CLI tool (clap + ratatui TUI)
-- [ ] `crates/tock-server/` — Sync server (Axum, AGPL-3.0)
-- [ ] `crates/tock-crypto/` — Encryption primitives
-- [ ] `crates/tock-sync/` — Sync protocol and transport
+- [ ] `crates/brega-core/` — Core library (domain model, crypto, storage traits)
+- [ ] `crates/brega-cli/` — CLI tool (clap + ratatui TUI)
+- [ ] `crates/brega-server/` — Sync server (Axum, AGPL-3.0)
+- [ ] `crates/brega-crypto/` — Encryption primitives
+- [ ] `crates/brega-sync/` — Sync protocol and transport
 - [ ] `bindings/swift/` — UniFFI Swift bindings
 - [ ] `apps/ios/` — iOS / iPadOS / macOS / watchOS app
 - [ ] `apps/web/` — Web app (WASM)

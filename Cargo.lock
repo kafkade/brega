@@ -664,6 +664,238 @@ dependencies = [
 ]
 
 [[package]]
+name = "brega-account"
+version = "0.5.0"
+dependencies = [
+ "brega-core",
+ "brega-crypto",
+ "brega-server",
+ "brega-storage",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "brega-caldav"
+version = "0.5.0"
+dependencies = [
+ "brega-core",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "brega-cli"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "brega-account",
+ "brega-caldav",
+ "brega-core",
+ "brega-crypto",
+ "brega-export",
+ "brega-import",
+ "brega-parse",
+ "brega-server",
+ "brega-storage",
+ "brega-sync",
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "dirs",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "keyring",
+ "printpdf",
+ "qrcode",
+ "ratatui",
+ "reqwest",
+ "rpassword",
+ "rusqlite",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "toml 1.1.3+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "unic-langid",
+ "uuid",
+]
+
+[[package]]
+name = "brega-core"
+version = "0.5.0"
+dependencies = [
+ "brega-crypto",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "brega-crypto"
+version = "0.5.0"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "hkdf 0.13.0",
+ "proptest",
+ "rand_core 0.6.4",
+ "sha2 0.11.0",
+ "srp",
+ "subtle",
+ "thiserror 2.0.19",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "brega-export"
+version = "0.5.0"
+dependencies = [
+ "brega-core",
+ "brega-storage",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tera",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "brega-import"
+version = "0.5.0"
+dependencies = [
+ "brega-core",
+ "brega-storage",
+ "csv",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "time",
+ "toml 1.1.3+spec-1.1.0",
+ "uuid",
+]
+
+[[package]]
+name = "brega-parse"
+version = "0.5.0"
+dependencies = [
+ "time",
+]
+
+[[package]]
+name = "brega-server"
+version = "0.5.0"
+dependencies = [
+ "axum",
+ "brega-core",
+ "brega-crypto",
+ "brega-sync",
+ "clap",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "brega-storage"
+version = "0.5.0"
+dependencies = [
+ "brega-core",
+ "brega-crypto",
+ "brega-sync",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "brega-sync"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "brega-core",
+ "brega-crypto",
+ "proptest",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "brega-uniffi"
+version = "0.5.0"
+dependencies = [
+ "brega-account",
+ "brega-core",
+ "brega-crypto",
+ "brega-storage",
+ "brega-sync",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "time",
+ "uniffi",
+ "uuid",
+]
+
+[[package]]
+name = "brega-wasm"
+version = "0.5.0"
+dependencies = [
+ "brega-account",
+ "getrandom 0.2.17",
+ "getrandom 0.4.2",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "uuid",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4482,238 +4714,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "tock-account"
-version = "0.5.0"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "time",
- "tock-core",
- "tock-crypto",
- "tock-server",
- "tock-storage",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "tock-caldav"
-version = "0.5.0"
-dependencies = [
- "serde_json",
- "thiserror 2.0.19",
- "time",
- "tock-core",
- "uuid",
-]
-
-[[package]]
-name = "tock-cli"
-version = "0.5.0"
-dependencies = [
- "async-trait",
- "clap",
- "clap_complete",
- "crossterm",
- "dirs",
- "i18n-embed",
- "i18n-embed-fl",
- "keyring",
- "printpdf",
- "qrcode",
- "ratatui",
- "reqwest",
- "rpassword",
- "rusqlite",
- "rust-embed",
- "serde",
- "serde_json",
- "tempfile",
- "time",
- "tock-account",
- "tock-caldav",
- "tock-core",
- "tock-crypto",
- "tock-export",
- "tock-import",
- "tock-parse",
- "tock-server",
- "tock-storage",
- "tock-sync",
- "tokio",
- "toml 1.1.3+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
- "unic-langid",
- "uuid",
-]
-
-[[package]]
-name = "tock-core"
-version = "0.5.0"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.19",
- "time",
- "tock-crypto",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "tock-crypto"
-version = "0.5.0"
-dependencies = [
- "aes-gcm",
- "argon2",
- "ed25519-dalek",
- "getrandom 0.2.17",
- "hkdf 0.13.0",
- "proptest",
- "rand_core 0.6.4",
- "sha2 0.11.0",
- "srp",
- "subtle",
- "thiserror 2.0.19",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "tock-export"
-version = "0.5.0"
-dependencies = [
- "rusqlite",
- "serde",
- "serde_json",
- "tera",
- "thiserror 2.0.19",
- "time",
- "tock-core",
- "tock-storage",
- "uuid",
-]
-
-[[package]]
-name = "tock-import"
-version = "0.5.0"
-dependencies = [
- "csv",
- "rusqlite",
- "serde",
- "serde_json",
- "time",
- "tock-core",
- "tock-storage",
- "toml 1.1.3+spec-1.1.0",
- "uuid",
-]
-
-[[package]]
-name = "tock-parse"
-version = "0.5.0"
-dependencies = [
- "time",
-]
-
-[[package]]
-name = "tock-server"
-version = "0.5.0"
-dependencies = [
- "axum",
- "clap",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "tempfile",
- "thiserror 2.0.19",
- "time",
- "tock-core",
- "tock-crypto",
- "tock-sync",
- "tokio",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "unicode-normalization",
- "uuid",
-]
-
-[[package]]
-name = "tock-storage"
-version = "0.5.0"
-dependencies = [
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.19",
- "time",
- "tock-core",
- "tock-crypto",
- "tock-sync",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "tock-sync"
-version = "0.5.0"
-dependencies = [
- "async-trait",
- "proptest",
- "sha2 0.11.0",
- "thiserror 2.0.19",
- "time",
- "tock-core",
- "tock-crypto",
- "uuid",
-]
-
-[[package]]
-name = "tock-uniffi"
-version = "0.5.0"
-dependencies = [
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "time",
- "tock-account",
- "tock-core",
- "tock-crypto",
- "tock-storage",
- "tock-sync",
- "uniffi",
- "uuid",
-]
-
-[[package]]
-name = "tock-wasm"
-version = "0.5.0"
-dependencies = [
- "getrandom 0.2.17",
- "getrandom 0.4.2",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "tock-account",
- "uuid",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "tokio"

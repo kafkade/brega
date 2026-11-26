@@ -1,5 +1,5 @@
 // Self-contained smoke test of the self-host onboarding + login path, exercised
-// with the REAL `tock-wasm` binding (not mocked). It drives the same client
+// with the REAL `brega-wasm` binding (not mocked). It drives the same client
 // code the app uses (`admin.ts` / `account.ts`) through a recording `fetch`,
 // so every request body the browser would transmit is captured and inspected.
 //
@@ -13,13 +13,13 @@
 //      ANY transmitted request body (register, srp/start, srp/finish).
 //
 // The server responses are synthesized in-test (no live server); the true
-// end-to-end variant against a real `tock-server` lives in e2e.selfhost.test.ts
-// and is opt-in behind TOCK_E2E=1.
+// end-to-end variant against a real `brega-server` lives in e2e.selfhost.test.ts
+// and is opt-in behind BREGA_E2E=1.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import init, { parse_setup_code } from "tock-wasm";
+import init, { parse_setup_code } from "brega-wasm";
 
 // Load the real wasm once. account.ts/admin.ts call init() with no argument;
 // wasm-bindgen's generated init short-circuits when already initialized, so this
@@ -27,7 +27,7 @@ import init, { parse_setup_code } from "tock-wasm";
 // Vitest runs with cwd = apps/web, so the pkg is two levels up under crates/.
 const WASM_PATH = resolve(
   process.cwd(),
-  "../../crates/tock-wasm/pkg/tock_wasm_bg.wasm",
+  "../../crates/brega-wasm/pkg/brega_wasm_bg.wasm",
 );
 
 beforeAll(async () => {
@@ -51,7 +51,7 @@ function jsonResponse(obj: unknown, status = 200): Response {
 
 describe("self-host onboarding + login (real WASM, no secrets transmitted)", () => {
   it("runs first-run admin → save kit → SRP login entirely client-side", async () => {
-    // Import the real client modules (this file does not mock "tock-wasm").
+    // Import the real client modules (this file does not mock "brega-wasm").
     const { signupFirstAdmin } = await import("../src/lib/admin");
     const { login } = await import("../src/lib/account");
 

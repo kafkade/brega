@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock the wasm module so the test runs without a wasm runtime.
-vi.mock("tock-wasm", () => {
+vi.mock("brega-wasm", () => {
   class LoginSession {
     start_request_json = JSON.stringify({ username: "a@b.c", a_pub: "AA" });
     constructor(_u: string) {}
@@ -16,7 +16,7 @@ vi.mock("tock-wasm", () => {
     default: () => Promise.resolve({}),
     signup_account: () => ({
       register_request_json: JSON.stringify({ username: "a@b.c" }),
-      emergency_kit_text: "tock Emergency Kit",
+      emergency_kit_text: "brega Emergency Kit",
       setup_code: "TOCK1:xyz",
       secret_key: "A4-XXXX",
     }),
@@ -53,6 +53,6 @@ describe("account flows", () => {
     vi.stubGlobal("fetch", f);
     const s = await login("https://s", "a@b.c", "pw", "A4-XXXX");
     expect(s.bearer_token).toBe("be");
-    expect(authHeaders(s)["X-Tock-Channel-Binding"]).toBe("cb");
+    expect(authHeaders(s)["X-Brega-Channel-Binding"]).toBe("cb");
   });
 });

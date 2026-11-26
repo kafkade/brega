@@ -1,16 +1,24 @@
-# Tock — Architecture Design Document
+# Brega — Architecture Design Document
 
-**Status:** Draft v0.1
+**Status:** Draft v0.1 — design reference.
+
+> **Read this first (2026-11-26).** This document mixes implemented and planned
+> design. Release scope is governed by [release-v1.md](release-v1.md) and later
+> plans by [roadmap.md](roadmap.md); §10's phase roadmap is **superseded**. Where
+> this file describes at-rest encryption, conflict handling, or platforms
+> differently from [ADR-021](adr/ADR-021-iphone-mac-first-product-direction.md),
+> the ADR wins. Notably: domain tables are currently plaintext at rest (fix:
+> SQLCipher), and concurrent same-field edits will merge automatically.
 
 ---
 
 ## 1. Executive Summary
 
-**Tock** is a unified personal productivity engine that fuses four traditionally separate tools — task management, habit tracking, time tracking, and a focus (Pomodoro) timer — into a single end-to-end encrypted, local-first system. It is built around a methodology-neutral Rust core that exposes the same data model to a powerful CLI (with optional ratatui TUI), native Apple apps (iOS, iPadOS, macOS, watchOS) via UniFFI bindings, and a future WASM-powered web client. Synchronization is event-sourced, conflict-free under normal use, and works against either a self-hosted AGPL-3.0 server or an optional hosted service — with the on-disk vault format and protocol fully documented so users are never locked in.
+**Brega** is a unified personal productivity engine that fuses four traditionally separate tools — task management, habit tracking, time tracking, and a focus (Pomodoro) timer — into a single end-to-end encrypted, local-first system. It is built around a methodology-neutral Rust core that exposes the same data model to a powerful CLI (with optional ratatui TUI), native Apple apps (iOS, iPadOS, macOS, watchOS) via UniFFI bindings, and a future WASM-powered web client. Synchronization is event-sourced, conflict-free under normal use, and works against either a self-hosted AGPL-3.0 server or an optional hosted service — with the on-disk vault format and protocol fully documented so users are never locked in.
 
-The target user is the *power productivity practitioner*: developers, researchers, founders, knowledge workers, and serious productivity practitioners who have outgrown single-purpose apps and are forced to maintain manual bridges between them. Tock collapses those bridges into first-class cross-domain primitives: a Pomodoro session linked to a task automatically logs a time block *and* increments a "deep work" habit; a recurring task can be promoted to (or replaced by) a habit; projects aggregate effort, completion velocity, and supporting habits in a single view. Filtering, urgency scoring, and reporting use a single expressive query language that extends uniformly across all four domains.
+The target user is the *power productivity practitioner*: developers, researchers, founders, knowledge workers, and serious productivity practitioners who have outgrown single-purpose apps and are forced to maintain manual bridges between them. Brega collapses those bridges into first-class cross-domain primitives: a Pomodoro session linked to a task automatically logs a time block *and* increments a "deep work" habit; a recurring task can be promoted to (or replaced by) a habit; projects aggregate effort, completion velocity, and supporting habits in a single view. Filtering, urgency scoring, and reporting use a single expressive query language that extends uniformly across all four domains.
 
-What differentiates Tock is the combination of *(a)* methodology-neutral design — GTD-style views are available but not enforced, identity-based habits are encouraged but not required — *(b)* uncompromising cryptographic design (two-secret key derivation à la 1Password — account password XOR a client-generated 128-bit Secret Key — per-item envelope encryption with AES-256-GCM, size-bucket padding, domain-separated AAD, SRP-6a authentication, and an Emergency Kit as the sole recovery path), and *(c)* a strict "core has zero I/O" architectural rule that makes the same Rust logic provably identical across CLI, iOS, watchOS, and web. Self-hosting is Immich-style — one server, an admin, and many user accounts who sign in from any device — while the server stays zero-knowledge and never sees plaintext. The result is a system that respects expert workflows, refuses to leak unencrypted data to any server, and provides an honest plain-text export at any time.
+What differentiates Brega is the combination of *(a)* methodology-neutral design — GTD-style views are available but not enforced, identity-based habits are encouraged but not required — *(b)* uncompromising cryptographic design (two-secret key derivation à la 1Password — account password XOR a client-generated 128-bit Secret Key — per-item envelope encryption with AES-256-GCM, size-bucket padding, domain-separated AAD, SRP-6a authentication, and an Emergency Kit as the sole recovery path), and *(c)* a strict "core has zero I/O" architectural rule that makes the same Rust logic provably identical across CLI, iOS, watchOS, and web. Self-hosting is Immich-style — one server, an admin, and many user accounts who sign in from any device — while the server stays zero-knowledge and never sees plaintext. The result is a system that respects expert workflows, refuses to leak unencrypted data to any server, and provides an honest plain-text export at any time.
 
 ---
 
@@ -79,11 +87,11 @@ Area  ── 1:N ──>  Project  ── 1:N ──>  Heading  ── 1:N ─�
 | **Logbook**  | `status:(done\|cancelled) order by done_at desc`                                                        |
 | **Trash**    | soft-deleted (see §2.1.8)                                                                               |
 
-Views are not hardcoded — they are seeded saved queries (`tock report` configs). Users can edit, delete, or add reports.
+Views are not hardcoded — they are seeded saved queries (`brega report` configs). Users can edit, delete, or add reports.
 
 #### 2.1.4 Urgency scoring
 
-Urgency scoring uses configurable weighted coefficients across cross-domain signals. Weights are user-configurable in `~/.config/Tock/config.toml`:
+Urgency scoring uses configurable weighted coefficients across cross-domain signals. Weights are user-configurable in `~/.config/Brega/config.toml`:
 
 ```
 urgency =   1.0  * (deadline_factor)        // 1.0 at deadline, 0.2 a week away, 1.2 if overdue
@@ -139,7 +147,7 @@ Template task (`status: 'recurring'`, never shown in normal views) owns the spec
 
 #### 2.1.7 Filter / query language
 
-A single grammar shared by `tock list`, saved reports, and the TUI search bar. EBNF (abridged):
+A single grammar shared by `brega list`, saved reports, and the TUI search bar. EBNF (abridged):
 
 ```
 query     := expr (WS expr)*
@@ -159,50 +167,50 @@ regex     := '/' .* '/'
 Examples:
 
 ```bash
-tock list status:pending +work due.before:eow -BLOCKED
-tock list project:home and (priority:H or +next) and energy:high
-tock list "annotations:/postmortem/" modified:7d..
-tock list udas.estimate:>=2h scheduled_for:today
+brega list status:pending +work due.before:eow -BLOCKED
+brega list project:home and (priority:H or +next) and energy:high
+brega list "annotations:/postmortem/" modified:7d..
+brega list udas.estimate:>=2h scheduled_for:today
 ```
 
 Virtual tags (auto-derived, not stored): `+OVERDUE`, `+TODAY`, `+WEEK`, `+MONTH`, `+BLOCKED`, `+BLOCKING`, `+ACTIVE` (currently being timed), `+FOCUS` (in active Pomodoro), `+SCHEDULED`, `+UNTAGGED`, `+ANNOTATED`, `+CHILD` (recurrence instance), `+ORPHAN` (deleted project).
 
 #### 2.1.8 Soft delete, annotations, dependencies
 
-- **Soft delete** — `tock delete <sid>` sets `deleted_at`; entry hidden from all views except `tock trash`. `tock purge` permanently removes after 30 days (configurable).
-- **Annotations** — append-only: `tock annotate <sid> "blocked on legal review"`. Each carries a timestamp and contributes to `+ANNOTATED` virtual tag. Sync as separate events (never overwritten).
-- **Dependencies** — `tock modify <sid> depends:42,43`. Cycle detection on insert (DFS); rejected with `error: would create dependency cycle 42 → 43 → 42`. Dependents auto-recompute `+BLOCKED` virtual tag.
+- **Soft delete** — `brega delete <sid>` sets `deleted_at`; entry hidden from all views except `brega trash`. `brega purge` permanently removes after 30 days (configurable).
+- **Annotations** — append-only: `brega annotate <sid> "blocked on legal review"`. Each carries a timestamp and contributes to `+ANNOTATED` virtual tag. Sync as separate events (never overwritten).
+- **Dependencies** — `brega modify <sid> depends:42,43`. Cycle detection on insert (DFS); rejected with `error: would create dependency cycle 42 → 43 → 42`. Dependents auto-recompute `+BLOCKED` virtual tag.
 
 #### 2.1.9 Context filtering
 
-A *context* is a named global filter. `tock context work` sets `+work and project.area:work` as an implicit AND on every query until `tock context none`. Stored per-device (not synced), so a phone can be in `personal` context while the desktop is in `work`.
+A *context* is a named global filter. `brega context work` sets `+work and project.area:work` as an implicit AND on every query until `brega context none`. Stored per-device (not synced), so a phone can be in `personal` context while the desktop is in `work`.
 
 #### 2.1.10 CLI examples (task)
 
 ```bash
 # Capture to inbox (natural)
-tock add "Email Sara about the Q3 contract" +work due:fri
+brega add "Email Sara about the Q3 contract" +work due:fri
 
 # Capture with project + deadline + priority
-tock add "Draft architecture RFC" project:work.backend due:2025-11-15 priority:H +next
+brega add "Draft architecture RFC" project:work.backend due:2025-11-15 priority:H +next
 
 # Move from inbox to project
-tock modify 42 project:home.repairs heading:"Kitchen"
+brega modify 42 project:home.repairs heading:"Kitchen"
 
 # Start working (also starts a time block — see §2.5)
-tock start 42
+brega start 42
 
 # Complete (also stops timer; closes Pomodoro if linked)
-tock done 42
+brega done 42
 
 # Today view with custom sort
-tock today --sort=urgency,deadline
+brega today --sort=urgency,deadline
 
 # Saved report
-tock report next   # alias for: status:pending +next limit:10 sort:urgency-
+brega report next   # alias for: status:pending +next limit:10 sort:urgency-
 
 # Annotate
-tock annotate 42 "Sara replied — needs legal review first"
+brega annotate 42 "Sara replied — needs legal review first"
 ```
 
 ---
@@ -279,8 +287,8 @@ Multiple entries per day are allowed (e.g. three 1-min meditations = 3 minutes).
 
 Default rule: a habit "is on streak" if it met its cadence for *N* consecutive periods. **Two configurable graces:**
 
-1. **Skip days** — N user-declared days/year (default 12) that don't break a streak. `tock habit skip 7 --reason "travel"`.
-2. **Freeze** — at risk of breaking? `tock habit freeze 7` consumes one of M (default 3) monthly freezes; counts as "done" for that day.
+1. **Skip days** — N user-declared days/year (default 12) that don't break a streak. `brega habit skip 7 --reason "travel"`.
+2. **Freeze** — at risk of breaking? `brega habit freeze 7` consumes one of M (default 3) monthly freezes; counts as "done" for that day.
 
 This explicitly rejects punitive streak design; behavior change requires elasticity.
 
@@ -338,7 +346,7 @@ When configured, the sync layer emits an additional encrypted stream readable by
 
 ```bash
 # Guided creation
-tock habit new --guided
+brega habit new --guided
 # >> Identity: "I am a writer"
 # >> Cue:       "After morning coffee"
 # >> Response:  "Write 1 sentence"
@@ -347,31 +355,31 @@ tock habit new --guided
 # >> Cadence:   daily
 
 # Quick add
-tock habit add "Read 10 pages" --identity "I am a reader" --cue "after dinner" --min 2pages --daily
+brega habit add "Read 10 pages" --identity "I am a reader" --cue "after dinner" --min 2pages --daily
 
 # Log
-tock habit log read                       # boolean / minimum
-tock habit log read --amount 25pages      # over-delivery, XP still capped
-tock habit done read                      # alias for log
+brega habit log read                       # boolean / minimum
+brega habit log read --amount 25pages      # over-delivery, XP still capped
+brega habit done read                      # alias for log
 
 # Slip (break habit)
-tock habit add "No social media before noon" --break --daily
-tock habit slip social --notes "checked twitter at 9am"
+brega habit add "No social media before noon" --break --daily
+brega habit slip social --notes "checked twitter at 9am"
 
 # Stacking
-tock habit add "Stretch 2 min" --stack-after read --delay 10m
+brega habit add "Stretch 2 min" --stack-after read --delay 10m
 
 # Status
-tock habit status
+brega habit status
 # >> read       L4 (Steady)   ████████░░  47/89 XP   streak 12d  next: today
 # >> stretch    L2 (Starter)  ███░░░░░░░   3/13 XP   streak 3d   next: today
 # >> social     L3 (Estd, ↓)  ████░░░░░░  18/13 XP   clean 8d    next: today
 
 # Skip
-tock habit skip read --reason "flu"
+brega habit skip read --reason "flu"
 
 # Freeze
-tock habit freeze stretch --tomorrow
+brega habit freeze stretch --tomorrow
 ```
 
 ---
@@ -409,19 +417,19 @@ Both natural and flag forms are accepted; they parse to the same AST.
 
 ```bash
 # Natural
-tock start "Deep work" on work/backend 2 hours ago
-tock start writing for habit read
-tock stop
-tock stop 5 minutes ago
+brega start "Deep work" on work/backend 2 hours ago
+brega start writing for habit read
+brega stop
+brega stop 5 minutes ago
 
 # Equivalent flag form
-tock start --title "Deep work" --project work/backend --ago 2h
-tock start --title writing --habit read
-tock stop --at "-5m"
+brega start --title "Deep work" --project work/backend --ago 2h
+brega start --title writing --habit read
+brega stop --at "-5m"
 
 # On-the-fly creation
-tock start "Customer call: Acme" on +client.acme              # creates project if missing
-tock start writing --habit "Morning pages" --create-habit     # creates habit if missing
+brega start "Customer call: Acme" on +client.acme              # creates project if missing
+brega start writing --habit "Morning pages" --create-habit     # creates habit if missing
 ```
 
 Date/time parser supports: `2h ago`, `yesterday 14:00`, `last monday`, `eow`, `1pm`, `-5m`, ISO 8601. Implemented in core (no `chrono-english` runtime dep — custom recursive-descent parser shared with task scheduling).
@@ -433,14 +441,14 @@ Date/time parser supports: `2h ago`, `yesterday 14:00`, `last monday`, `eow`, `1
 #### 2.3.4 Reporting
 
 ```bash
-tock report time today
-tock report time week --by project
-tock report time 2025-10-01..2025-10-31 --by tag --format csv
-tock report time --task 42 --format json
-tock report time --billable --by project --rate-default 12500    # cents/hr
+brega report time today
+brega report time week --by project
+brega report time 2025-10-01..2025-10-31 --by tag --format csv
+brega report time --task 42 --format json
+brega report time --billable --by project --rate-default 12500    # cents/hr
 ```
 
-Reports are pluggable Tera templates in `~/.config/Tock/reports/`. Built-in formats: `table` (default), `csv`, `json`, `markdown`, `ical`, `ledger` (plain-text accounting compatible).
+Reports are pluggable Tera templates in `~/.config/Brega/reports/`. Built-in formats: `table` (default), `csv`, `json`, `markdown`, `ical`, `ledger` (plain-text accounting compatible).
 
 Sample table output:
 
@@ -458,7 +466,7 @@ personal.reading      3h 50m  11.9%        —    (habit: read +47xp)
 #### 2.3.5 Edge cases
 
 - **Clock jumps / time zones** — all blocks stored as UTC; display in local TZ; DST-safe via `time` crate.
-- **Forgot to stop** — `tock doctor` detects blocks > 8h (configurable) and prompts retroactive truncation.
+- **Forgot to stop** — `brega doctor` detects blocks > 8h (configurable) and prompts retroactive truncation.
 - **Overlap from sync** — two devices running concurrent blocks: keep both; tag the loser `+SYNC_OVERLAP`; reporting deduplicates by `max(start, other.end)` per device with a clear annotation.
 - **Backdating into another block** — refuse with `error: would overlap block b17 (10:00–11:30)`; offer `--split` to trim the existing block.
 
@@ -521,8 +529,8 @@ When a cycle completes:
 #### 2.4.4 Statistics
 
 ```bash
-tock focus stats today
-tock focus stats week
+brega focus stats today
+brega focus stats week
 # >> Completed:    18 cycles  (7h 30m focus)
 # >> Aborted:       3 cycles  (longest streak: 6)
 # >> Best time of day: 09:00–11:00 (12 cycles)
@@ -533,14 +541,14 @@ tock focus stats week
 #### 2.4.5 CLI examples (focus)
 
 ```bash
-tock focus start                       # uses default config, no task
-tock focus start --task 42             # bound to task
-tock focus start --cycles 3 --task 42  # plan a fixed number
-tock focus pause
-tock focus resume
-tock focus skip                        # skip current break
-tock focus abort                       # ends session, logs partial block
-tock focus status                      # live status (also via TUI)
+brega focus start                       # uses default config, no task
+brega focus start --task 42             # bound to task
+brega focus start --cycles 3 --task 42  # plan a fixed number
+brega focus pause
+brega focus resume
+brega focus skip                        # skip current break
+brega focus abort                       # ends session, logs partial block
+brega focus status                      # live status (also via TUI)
 ```
 
 In TUI: `f` opens the focus pane with a live countdown ring and current task; `Space` pauses, `s` skips break, `a` aborts.
@@ -555,19 +563,19 @@ The four domains share IDs, events, and the urgency engine. Key integration poin
 |------------------------------------------------------|------------------------------------------------------------------------|
 | Focus cycle → Time block                             | `FocusSession` close handler writes `TimeBlock { source: Pomodoro }`.  |
 | Focus cycle → Habit XP                               | `on_complete_log_habit` config; idempotent on cycle UUID.              |
-| `tock start <task>` (timer) auto-starts task           | Task `status: started` if `pending`; `+ACTIVE` virtual tag; urgency↑.  |
-| `tock done <task>` stops active block + focus          | If block's `task_id` matches, stop block; if focus's `task_id` matches, complete focus. |
+| `brega start <task>` (timer) auto-starts task           | Task `status: started` if `pending`; `+ACTIVE` virtual tag; urgency↑.  |
+| `brega done <task>` stops active block + focus          | If block's `task_id` matches, stop block; if focus's `task_id` matches, complete focus. |
 | Habit completion can satisfy a task                  | `Task.satisfied_by_habit: Option<Uuid>`. When that habit logs ≥ minimum today, task auto-completes (recurring case). |
-| Project aggregation                                  | `tock project show work.backend` lists tasks + open habits scoped to project + week's time blocks. |
-| Recurring task ↔ Habit promotion                     | `tock task promote-to-habit 42` archives the recurring template and creates a habit with the same cadence; existing instances stay as-is. |
+| Project aggregation                                  | `brega project show work.backend` lists tasks + open habits scoped to project + week's time blocks. |
+| Recurring task ↔ Habit promotion                     | `brega task promote-to-habit 42` archives the recurring template and creates a habit with the same cadence; existing instances stay as-is. |
 
 #### 2.5.1 Edge cases
 
 - **Deleted recurring task with linked habit**: deleting the template does *not* delete the habit. Habit retains `source_task_id` for provenance.
-- **Habit deleted while focus session credits it**: focus session continues; on completion, the habit credit is silently skipped (logged to `tock doctor` for visibility).
+- **Habit deleted while focus session credits it**: focus session continues; on completion, the habit credit is silently skipped (logged to `brega doctor` for visibility).
 - **Time block on archived project**: allowed (you may legitimately log time to a closed project); UI shows project name struck through.
 - **Sync conflict on `Task.status`**: LWW per field by `(lamport, device_id)`; the `status: done` write wins only if its causality dominates a concurrent `status: cancelled` (see §6).
-- **Block ends while focus is still running** (e.g. manual `tock stop`): focus session continues but its time block is recreated on next cycle complete; the manually stopped block is preserved.
+- **Block ends while focus is still running** (e.g. manual `brega stop`): focus session continues but its time block is recreated on next cycle complete; the manually stopped block is preserved.
 
 ---
 
@@ -923,7 +931,7 @@ Rationale: a separate EAV `uda_values` table would force JOINs on every list que
 ### 3.4 Migration strategy
 
 - `PRAGMA user_version` is the source of truth.
-- Migrations are numbered, embedded in the `tock-core` crate via `include_str!`, and contain:
+- Migrations are numbered, embedded in the `brega-core` crate via `include_str!`, and contain:
   - `up.sql` — schema changes
   - `data.rs` — optional Rust-side data backfill (re-encryption, re-derive caches)
   - `checksum` — sha256 verified at startup
@@ -950,23 +958,23 @@ Rationale: a separate EAV `uda_values` table would force JOINs on every list que
 ### 4.1 Crate / workspace layout
 
 ```
-Tock/
+Brega/
 ├── Cargo.toml                      # workspace
 ├── rust-toolchain.toml             # pinned stable, edition = "2024"
 ├── deny.toml                       # cargo-deny
 ├── crates/
-│   ├── tock-core/               # PURE: zero I/O, zero net, zero async runtime
-│   ├── tock-crypto/             # PURE: key hierarchy, 2SKD, AEAD, SRP, Secret Key encoding
-│   ├── tock-storage/            # SQLite adapter (sync rusqlite), schema, migrations
-│   ├── tock-sync/               # event log, conflict res, transport trait (no I/O impl)
-│   ├── tock-parse/              # filter DSL + natural-language date/time parser
-│   ├── tock-cli/                # clap subcommands + ratatui TUI binary `tock`
-│   ├── tock-server/             # Axum sync server (AGPL-3.0)
-│   ├── tock-import/             # Things 3, Taskwarrior, CSV, JSON importers
-│   ├── tock-export/             # JSON, CSV, Markdown, iCal, ledger
-│   ├── tock-uniffi/             # UniFFI scaffolding crate (cdylib + udl)
-│   ├── tock-account/            # PURE: account signup/login orchestration (2SKD + SRP, Emergency Kit, Setup Code)
-│   └── tock-wasm/               # wasm-bindgen account bindings for the web app
+│   ├── brega-core/               # PURE: zero I/O, zero net, zero async runtime
+│   ├── brega-crypto/             # PURE: key hierarchy, 2SKD, AEAD, SRP, Secret Key encoding
+│   ├── brega-storage/            # SQLite adapter (sync rusqlite), schema, migrations
+│   ├── brega-sync/               # event log, conflict res, transport trait (no I/O impl)
+│   ├── brega-parse/              # filter DSL + natural-language date/time parser
+│   ├── brega-cli/                # clap subcommands + ratatui TUI binary `brega`
+│   ├── brega-server/             # Axum sync server (AGPL-3.0)
+│   ├── brega-import/             # Things 3, Taskwarrior, CSV, JSON importers
+│   ├── brega-export/             # JSON, CSV, Markdown, iCal, ledger
+│   ├── brega-uniffi/             # UniFFI scaffolding crate (cdylib + udl)
+│   ├── brega-account/            # PURE: account signup/login orchestration (2SKD + SRP, Emergency Kit, Setup Code)
+│   └── brega-wasm/               # wasm-bindgen account bindings for the web app
 ├── bindings/
 │   └── swift/                      # generated Swift package
 ├── apps/
@@ -981,18 +989,18 @@ Tock/
 
 | Crate              | License     | I/O? | Async? | Depends on                                     |
 |--------------------|-------------|------|--------|------------------------------------------------|
-| `tock-core`     | Apache-2.0  | NO   | NO     | `tock-crypto`, `tock-parse`, `serde`, `time`, `uuid`, `zeroize` |
-| `tock-crypto`   | Apache-2.0  | NO   | NO     | `aes-gcm`, `argon2`, `hkdf`, `x25519-dalek`, `srp`, `zeroize`, `subtle` |
-| `tock-parse`    | Apache-2.0  | NO   | NO     | `winnow` (or hand-rolled), `time`              |
-| `tock-storage`  | Apache-2.0  | YES (disk) | NO | `tock-core`, `rusqlite` (bundled)         |
-| `tock-sync`     | Apache-2.0  | trait-only | trait-only | `tock-core`, `tock-storage`     |
-| `tock-import`   | Apache-2.0  | YES  | NO     | `tock-core`, `tock-storage`              |
-| `tock-export`   | Apache-2.0  | YES  | NO     | `tock-core`, `tock-storage`              |
-| `tock-cli`      | Apache-2.0  | YES  | YES    | all of the above + `clap`, `ratatui`, `tokio` (single-thread) |
-| `tock-server`   | AGPL-3.0    | YES  | YES    | `tock-sync`, `axum`, `sqlx`, `tokio`        |
-| `tock-uniffi`   | Apache-2.0  | YES (binding shim) | NO | `tock-core`, `tock-storage`, `tock-sync`, `uniffi` |
-| `tock-account`  | Apache-2.0  | NO   | NO     | `tock-core`, `tock-crypto` (orchestrates 2SKD + SRP; clients own HTTP) |
-| `tock-wasm`     | Apache-2.0  | NO   | NO     | `tock-account`, `wasm-bindgen` (web edge owns `fetch`) |
+| `brega-core`     | Apache-2.0  | NO   | NO     | `brega-crypto`, `brega-parse`, `serde`, `time`, `uuid`, `zeroize` |
+| `brega-crypto`   | Apache-2.0  | NO   | NO     | `aes-gcm`, `argon2`, `hkdf`, `x25519-dalek`, `srp`, `zeroize`, `subtle` |
+| `brega-parse`    | Apache-2.0  | NO   | NO     | `winnow` (or hand-rolled), `time`              |
+| `brega-storage`  | Apache-2.0  | YES (disk) | NO | `brega-core`, `rusqlite` (bundled)         |
+| `brega-sync`     | Apache-2.0  | trait-only | trait-only | `brega-core`, `brega-storage`     |
+| `brega-import`   | Apache-2.0  | YES  | NO     | `brega-core`, `brega-storage`              |
+| `brega-export`   | Apache-2.0  | YES  | NO     | `brega-core`, `brega-storage`              |
+| `brega-cli`      | Apache-2.0  | YES  | YES    | all of the above + `clap`, `ratatui`, `tokio` (single-thread) |
+| `brega-server`   | AGPL-3.0    | YES  | YES    | `brega-sync`, `axum`, `sqlx`, `tokio`        |
+| `brega-uniffi`   | Apache-2.0  | YES (binding shim) | NO | `brega-core`, `brega-storage`, `brega-sync`, `uniffi` |
+| `brega-account`  | Apache-2.0  | NO   | NO     | `brega-core`, `brega-crypto` (orchestrates 2SKD + SRP; clients own HTTP) |
+| `brega-wasm`     | Apache-2.0  | NO   | NO     | `brega-account`, `wasm-bindgen` (web edge owns `fetch`) |
 
 **Mandatory `Cargo.toml` lints** in every workspace member:
 
@@ -1011,36 +1019,36 @@ panic = "deny"
 todo = "deny"
 ```
 
-`tock-core` and `tock-crypto` carry the additional invariant enforced by CI: `cargo tree -p tock-core --edges normal` must not list `tokio`, `reqwest`, `rusqlite`, `std::fs`, `std::net`. Verified with a `xtask check-purity` job that scans dependency manifests.
+`brega-core` and `brega-crypto` carry the additional invariant enforced by CI: `cargo tree -p brega-core --edges normal` must not list `tokio`, `reqwest`, `rusqlite`, `std::fs`, `std::net`. Verified with a `xtask check-purity` job that scans dependency manifests.
 
 ### 4.2 Dependency graph (ASCII)
 
 ```
                           ┌────────────────────┐
-                          │   tock-crypto   │ (pure)
+                          │   brega-crypto   │ (pure)
                           └─────────┬──────────┘
                                     │
                           ┌─────────▼──────────┐    ┌────────────────┐
-                          │    tock-core    │◄───┤ tock-parse  │ (pure)
+                          │    brega-core    │◄───┤ brega-parse  │ (pure)
                           └──┬──────┬──────────┘    └────────────────┘
                              │      │
                 ┌────────────▼┐    ┌▼────────────────┐
-                │ tock-    │    │ tock-sync    │ (trait-only IO)
+                │ brega-    │    │ brega-sync    │ (trait-only IO)
                 │  storage    │    └──┬──────────────┘
                 └──┬──────────┘       │
                    │          ┌───────┴────────┐
                    │          │                │
             ┌──────▼──────────▼┐    ┌──────────▼─────────┐
-            │  tock-cli     │    │  tock-server    │ (AGPL)
+            │  brega-cli     │    │  brega-server    │ (AGPL)
             │  (clap+ratatui)  │    │  (axum)            │
             └──────┬───────────┘    └────────────────────┘
                    │
             ┌──────▼───────────┐    ┌─────────────────────┐
-            │ tock-import   │    │ tock-export      │
+            │ brega-import   │    │ brega-export      │
             └──────────────────┘    └─────────────────────┘
 
                    ┌──────────────────────────┐
-                   │   tock-uniffi (shim)  │
+                   │   brega-uniffi (shim)  │
                    └─────────┬────────────────┘
                              │ generates
                    ┌─────────▼────────────────┐
@@ -1054,7 +1062,7 @@ todo = "deny"
    └──────────┘         └──────────┘           └───────────┘
 
    ┌──────────────────────────────────────┐
-   │  apps/web  ◄── tock-core (wasm32) │
+   │  apps/web  ◄── brega-core (wasm32) │
    └──────────────────────────────────────┘
 ```
 
@@ -1062,27 +1070,27 @@ todo = "deny"
 
 #### 4.3.1 UniFFI (Apple)
 
-- Single `tock-uniffi` crate exposes a high-level facade: `Workspace`, `TaskRepo`, `HabitRepo`, `TimeRepo`, `FocusController`, `SyncClient`.
+- Single `brega-uniffi` crate exposes a high-level facade: `Workspace`, `TaskRepo`, `HabitRepo`, `TimeRepo`, `FocusController`, `SyncClient`.
 - `.udl` files generated from `#[uniffi::export]` macros (UniFFI 0.28+).
 - Built as a `staticlib` + `cdylib`; xtask script lipos arm64-ios, arm64-ios-sim, arm64-macos, x86_64-macos into an `.xcframework`.
 - Async surfaces use UniFFI's async support backed by `tokio` current-thread runtime owned by the shim (never by core).
 
 #### 4.3.2 WASM (web)
 
-- `tock-core` compiled to `wasm32-unknown-unknown` with `wasm-bindgen`.
-- Storage in web is an alternate `tock-storage-web` crate using IndexedDB via `idb` crate; same trait as `rusqlite` storage.
+- `brega-core` compiled to `wasm32-unknown-unknown` with `wasm-bindgen`.
+- Storage in web is an alternate `brega-storage-web` crate using IndexedDB via `idb` crate; same trait as `rusqlite` storage.
 - Sync uses `fetch` via `web-sys`.
 
 #### 4.3.3 Feature flags
 
 ```toml
-# tock-core
+# brega-core
 [features]
 default = []
 serde = ["dep:serde"]                # for export crates
 schemars = ["dep:schemars"]          # JSON schema generation
 
-# tock-storage
+# brega-storage
 [features]
 default = ["sqlite-bundled"]
 sqlite-bundled = []                  # 1.0: plain rusqlite bundle; app-layer AEAD (ADR-014)
@@ -1090,7 +1098,7 @@ sqlite-bundled = []                  # 1.0: plain rusqlite bundle; app-layer AEA
 # sqlite-sqlcipher-bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 # sqlite-sqlcipher-system  = ["rusqlite/sqlcipher"]
 
-# tock-cli
+# brega-cli
 [features]
 default = ["tui", "completion"]
 tui = ["dep:ratatui", "dep:crossterm"]
@@ -1110,7 +1118,7 @@ completion = ["clap_complete"]
 | `xtask wasm-build`                    | every PR                 | wasm pkg                            |
 | `xtask xcframework`                   | tag `v*`, nightly        | Apple xcframework                   |
 | `cargo dist`                          | tag `v*`                 | cli binaries (linux, mac, win)      |
-| `docker build tock-server`         | tag `v*`                 | server image (AGPL notice baked in) |
+| `docker build brega-server`         | tag `v*`                 | server image (AGPL notice baked in) |
 | `mdbook build docs/`                  | every push to main       | docs site                           |
 
 Matrix OSes: `ubuntu-latest`, `macos-14` (arm64), `windows-latest`. MSRV pinned in `rust-toolchain.toml`; bumped explicitly.
@@ -1119,7 +1127,7 @@ Matrix OSes: `ubuntu-latest`, `macos-14` (arm64), `windows-latest`. MSRV pinned 
 
 ## 5. Encryption & Security Design
 
-Tock's encryption design is adapted for an event-sourced workload.
+Brega's encryption design is adapted for an event-sourced workload.
 
 ### 5.1 Key hierarchy
 
@@ -1262,7 +1270,7 @@ the only recovery path**. The former 24-word recovery key and the `vk_recover_ct
   - the **sign-in address** (server URL),
   - the **account email**,
   - the **Secret Key** (`A4-<accountID>-<6 groups>-<checksum>`, 128-bit, Crockford Base32),
-  - a blank space for the user to optionally record the password (Tock never stores it).
+  - a blank space for the user to optionally record the password (Brega never stores it).
 - **Recovery / new-device flow** = ordinary sign-in: password + Secret Key → `URK` → `MEK` →
   unwrap `VK` → pull and decrypt. There is **no** server-side reset and **no** VK escrow.
 - **Loss model:** losing the Secret Key with no Emergency Kit means the data is **unrecoverable
@@ -1294,12 +1302,12 @@ platform keystore on signed-in devices.
 - **Coercion / rubber-hose** — no plausible-deniability hidden vault in v1.
 - **Traffic analysis at scale** — bucketed sizes mitigate per-event leakage but a passive adversary can still infer activity timing.
 - **Side channels in third-party crypto crates** — we rely on `aes-gcm`, `argon2`, `x25519-dalek` audits and CI advisory checks.
-- **Forward secrecy of historical events** — past events remain decryptable with VK; rotating VK requires full re-encryption (a `tock vault rotate` operation).
+- **Forward secrecy of historical events** — past events remain decryptable with VK; rotating VK requires full re-encryption (a `brega vault rotate` operation).
 
 **Assurance level (independent review):** the guarantees above are *design
-intent*, not externally verified claims. As of 1.0, tock's own protocol and
+intent*, not externally verified claims. As of 1.0, brega's own protocol and
 implementation are **unaudited (pre-audit)** — only the underlying RustCrypto
-primitives have had external review, not tock's composition of them. This is a
+primitives have had external review, not brega's composition of them. This is a
 deliberate, documented decision ([ADR-015](adr/ADR-015-pre-1.0-security-audit-status.md));
 the scope of the intended external review is published in
 [docs/security/audit-scope.md](security/audit-scope.md).
@@ -1364,7 +1372,7 @@ The server stores only `(account_id, salt_srp, v, role)` — never the password,
 
 ### 5.7 Server account management (self-hosted)
 
-The `tock-server` crate owns the account/admin/user **model**; the SRP login
+The `brega-server` crate owns the account/admin/user **model**; the SRP login
 handshake and session tokens of §5.6 layer on top of it (issue #130). Accounts
 are a first-class self-hosted feature — available in every server mode, not
 gated to hosted billing.
@@ -1380,11 +1388,11 @@ password, Secret Key, URK, or 2SKD root.
 **First-run bootstrap (Immich pattern).** On a fresh instance the first
 registration is auto-promoted to `admin` and bypasses the policy/invite checks,
 so the instance can't be hijacked before setup. An offline
-`tock-server admin create-admin` CLI is the alternative for headless
+`brega-server admin create-admin` CLI is the alternative for headless
 provisioning.
 
 **Registration policy.** `open` | `invite-only` | `disabled` (default
-`disabled`, Immich-style), configurable via the `TOCK_REGISTRATION_POLICY` env
+`disabled`, Immich-style), configurable via the `BREGA_REGISTRATION_POLICY` env
 var at startup and the admin API at runtime. Because admins can't set passwords
 (zero-knowledge), "creating a user" mints a single-use **invite token**; the
 invitee completes registration with their own client-computed SRP credentials.
@@ -1440,12 +1448,12 @@ Secret Key must be stored separately from the backup file.
 
 ## 6. Sync Protocol Design
 
-Tock syncs by replicating an **append-only event log** between devices through one or more servers (or peer-to-peer via the same transport trait). Conflict detection uses vector clocks; resolution uses LWW at field granularity for state, append-only for logs (annotations, habit entries, time blocks, focus interruptions).
+Brega syncs by replicating an **append-only event log** between devices through one or more servers (or peer-to-peer via the same transport trait). Conflict detection uses vector clocks; resolution uses LWW at field granularity for state, append-only for logs (annotations, habit entries, time blocks, focus interruptions).
 
 ### 6.1 Event schema
 
 ```rust
-// crates/tock-sync/src/event.rs
+// crates/brega-sync/src/event.rs
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -1523,7 +1531,7 @@ Resolution is per-`EventOp` and per-`EntityKind`:
 | `time_blocks` open-overlap across devices                | Both apply; mark both with virtual tag `+SYNC_OVERLAP` (see §2.3.5).           |
 | `focus_sessions` two devices started concurrently        | The one with earlier `started_at` wins; the other is downgraded to `Aborted` with `note: "superseded by sync"`. |
 
-A **conflict log** (queryable via `tock sync conflicts`) surfaces LWW-losers for user review without blocking sync.
+A **conflict log** (queryable via `brega sync conflicts`) surfaces LWW-losers for user review without blocking sync.
 
 ### 6.4 Snapshot / compaction
 
@@ -1567,7 +1575,7 @@ present; unchanged from [ADR-003](adr/ADR-003-event-sourced-sync.md)):
 Existing device E                    New device N                     Server S
 ─────────────────                    ────────────                     ──────────
 
-1. User: `tock device pair`
+1. User: `brega device pair`
    E generates ephemeral X25519 (es, ep_E)
    E displays QR encoding:
      { vault_id, server_url, ep_E, fingerprint=SHA256(ep_E)[:8] }
@@ -1611,7 +1619,7 @@ Notes:
 ### 6.6 Transport abstraction
 
 ```rust
-// crates/tock-sync/src/transport.rs
+// crates/brega-sync/src/transport.rs
 
 #[async_trait]
 pub trait Transport: Send + Sync {
@@ -1645,12 +1653,12 @@ pub struct PullBatch { pub events: Vec<Event>, pub next_cursor: SyncCursor, pub 
 ```
 
 Implementations:
-- `HttpTransport` (default, in `tock-cli`) — REST over HTTPS, long-poll fallback if WebSocket unavailable.
+- `HttpTransport` (default, in `brega-cli`) — REST over HTTPS, long-poll fallback if WebSocket unavailable.
 - `WebsocketTransport` — duplex, used by Apple apps and TUI live mode.
 - `LocalLanTransport` — mDNS-discovered peer, X25519-authenticated, useful for offline LAN sync.
 - `FileSyncTransport` — drop events to a shared folder (Syncthing / iCloud Drive); enables zero-server operation.
 
-Every implementation lives outside `tock-core` and is injected into `tock-sync` via the trait.
+Every implementation lives outside `brega-core` and is injected into `brega-sync` via the trait.
 
 ### 6.7 Bandwidth and latency budgets
 
@@ -1667,7 +1675,7 @@ Working assumptions, derived from a power user generating ~200 events/day (tasks
 | Server storage per active user                  | **~50 MiB/year** worst case | dominated by tombstones; compaction reclaims |
 | Maximum event batch                             | **256 events / 256 KiB** | whichever first                              |
 
-Backpressure: if push fails, events queue locally indefinitely; `tock sync status` surfaces backlog count and oldest unsynced timestamp. There is no in-protocol size cap on the local queue — the only limit is local disk.
+Backpressure: if push fails, events queue locally indefinitely; `brega sync status` surfaces backlog count and oldest unsynced timestamp. There is no in-protocol size cap on the local queue — the only limit is local disk.
 
 ## 7. CLI Design
 
@@ -1678,8 +1686,8 @@ The CLI follows a verb-first layout with namespaced subcommands: a small number 
 The design rule: **the 10 most common operations are single-token; everything else is namespaced.**
 
 ```
-tock
-├── (default)                              # `tock` with no args = `list today`
+brega
+├── (default)                              # `brega` with no args = `list today`
 │
 ├── ── Task surface ────────────────────────────────────────────────
 ├── add <natural...>                       # Create a task
@@ -1867,7 +1875,7 @@ tock
 
 #### Undo / redo semantics
 
-`tock undo` reverses the last mutating command and `tock redo` re-applies it.
+`brega undo` reverses the last mutating command and `brega redo` re-applies it.
 Because the domain repositories write directly to SQLite and only synthesize
 sync events at sync time (there is no live event stream to replay), undo/redo is
 implemented as a **row-level snapshot journal** rather than by replaying events:
@@ -1875,7 +1883,7 @@ implemented as a **row-level snapshot journal** rather than by replaying events:
 - Before a mutating command runs, the tracked domain tables are snapshotted;
   after it completes, they are snapshotted again and the two are diffed into a
   change set (inserts / updates / deletes) persisted in the local `undo_log`
-  table (`crates/tock-storage/src/undo.rs`).
+  table (`crates/brega-storage/src/undo.rs`).
 - `undo` applies a change set's inverse inside a transaction; `redo` re-applies
   it forward. Cascade effects (recurrence spawn, urgency recalculation, `done`
   auto-stopping a linked focus session or timer) are captured in the same change
@@ -1906,8 +1914,8 @@ A `<filter>` argument accepts:
 The CLI accepts **two equivalent forms** for every mutation command:
 
 ```
-tock add Buy milk tomorrow at 5pm @errands #shopping !
-tock add "Buy milk" --due "tomorrow 5pm" --tag errands --project shopping --priority H
+brega add Buy milk tomorrow at 5pm @errands #shopping !
+brega add "Buy milk" --due "tomorrow 5pm" --tag errands --project shopping --priority H
 ```
 
 Both produce identical events. The parser tries the natural form first; tokens consumed by it become structured, and remaining tokens fall through to the description.
@@ -1964,7 +1972,7 @@ When a phrase has multiple valid parses, the CLI:
    ```
    ✓ Added 4f2: "Call Pat about 2pm meeting"
      ⓘ "2pm" treated as description (anchored "tomorrow" used as due).
-       To override: `tock mod 4f2 due:"tomorrow 2pm"`
+       To override: `brega mod 4f2 due:"tomorrow 2pm"`
    ```
 4. Non-TTY (scripts, hooks): always picks highest-scoring parse silently; structured result available via `--json`.
 
@@ -1972,12 +1980,12 @@ When a phrase has multiple valid parses, the CLI:
 
 | Natural                                                            | Flag form                                                                                  |
 |--------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| `tock add Pay rent on the 1st !! @finance`                        | `tock add "Pay rent" --due 2025-04-01 --priority M --area finance`                        |
-| `tock add Email Sam #followup due friday for 15m`                 | `tock add "Email Sam" -t followup --due fri --estimate 15m`                               |
-| `tock mod 4f2 tomorrow !`                                         | `tock mod 4f2 --due tomorrow --priority L`                                                |
-| `tock start writing chapter 3 @@book.draft`                       | `tock start --project book.draft --note "writing chapter 3"`                              |
-| `tock habit add Meditate 10m every morning at 7 stack-after coffee` | `tock habit add Meditate --target 10 --unit minutes --cadence "daily 07:00" --stack-after coffee` |
-| `tock focus start 4f2 25/5x4`                                     | `tock focus start 4f2 --length 25m --break 5m --cycles 4`                                 |
+| `brega add Pay rent on the 1st !! @finance`                        | `brega add "Pay rent" --due 2025-04-01 --priority M --area finance`                        |
+| `brega add Email Sam #followup due friday for 15m`                 | `brega add "Email Sam" -t followup --due fri --estimate 15m`                               |
+| `brega mod 4f2 tomorrow !`                                         | `brega mod 4f2 --due tomorrow --priority L`                                                |
+| `brega start writing chapter 3 @@book.draft`                       | `brega start --project book.draft --note "writing chapter 3"`                              |
+| `brega habit add Meditate 10m every morning at 7 stack-after coffee` | `brega habit add Meditate --target 10 --unit minutes --cadence "daily 07:00" --stack-after coffee` |
+| `brega focus start 4f2 25/5x4`                                     | `brega focus start 4f2 --length 25m --break 5m --cycles 4`                                 |
 
 #### Errors and suggestions
 
@@ -1987,7 +1995,7 @@ Parse failures never abort silently. The CLI returns exit 2 and prints a Rust-st
 error: could not parse temporal expression
   ┌─ stdin
   │
-  │ tock add Call Sam next blursday at 5
+  │ brega add Call Sam next blursday at 5
   │                ^^^^^^^^^^^^^^ here
   │
   = note: "blursday" is not a recognized day name
@@ -2001,7 +2009,7 @@ Powered by a small Levenshtein dictionary over the keyword set (weekdays, named 
 The TUI is a thin layer over the same core library used by the CLI: every action emits the same event the CLI would. The TUI is **panel-based with vim-style keys**, not a generic file-manager dual-pane. Layout adapts to terminal size; below is the ≥120×30 layout.
 
 ```
-┌─ tock ──────────────────── vault: unlocked  · sync: ✓ 12s ago · ctx: work ─┐
+┌─ brega ──────────────────── vault: unlocked  · sync: ✓ 12s ago · ctx: work ─┐
 │ ┌─ Views ────────┐ ┌─ Today  ────────────────────────────────┐ ┌─ Detail ─┐ │
 │ │ ▸ Inbox    (3) │ │ ◉ 09:00  Write standup notes      ~10m │ │ Write    │ │
 │ │ ● Today    (7) │ │ ◉        Review PR #482        @@work  │ │ standup  │ │
@@ -2062,7 +2070,7 @@ The TUI is a thin layer over the same core library used by the CLI: every action
 
 #### CLI ↔ TUI mapping
 
-Every TUI keystroke is implemented as `core::dispatch(Command)` against the same command enum as the CLI parser. `:` opens a command line that accepts the *exact* CLI grammar minus the leading `tock`:
+Every TUI keystroke is implemented as `core::dispatch(Command)` against the same command enum as the CLI parser. `:` opens a command line that accepts the *exact* CLI grammar minus the leading `brega`:
 
 ```
 : add Buy milk tomorrow #shopping
@@ -2076,18 +2084,18 @@ This guarantees feature parity and means automation scripts and TUI muscle memor
 
 **Format**: TOML.
 **Location**:
-- Linux: `$XDG_CONFIG_HOME/tock/config.toml` (default `~/.config/tock/config.toml`).
-- macOS: `~/Library/Application Support/tock/config.toml` (but `~/.config/tock/config.toml` honored if present, for parity with dotfiles).
-- Windows: `%APPDATA%\tock\config.toml`.
+- Linux: `$XDG_CONFIG_HOME/brega/config.toml` (default `~/.config/brega/config.toml`).
+- macOS: `~/Library/Application Support/brega/config.toml` (but `~/.config/brega/config.toml` honored if present, for parity with dotfiles).
+- Windows: `%APPDATA%\brega\config.toml`.
 
-Vault data is **separate** (`vault.path` in config, default `~/.tock/vault/` on Unix-like systems).
+Vault data is **separate** (`vault.path` in config, default `~/.brega/vault/` on Unix-like systems).
 
 #### Full config schema with defaults
 
 ```toml
 # ─── General ──────────────────────────────────────────────────────────────
 [general]
-default_view       = "today"          # what `tock` with no args shows
+default_view       = "today"          # what `brega` with no args shows
 confirm_destructive = true            # ask before delete/purge
 editor             = ""               # falls back to $EDITOR, then $VISUAL
 pager              = ""               # falls back to $PAGER, then "less -FRX"
@@ -2103,7 +2111,7 @@ language    = "en"                    # for natural language parser
 
 # ─── Vault & crypto ───────────────────────────────────────────────────────
 [vault]
-path             = "~/.tock/vault"
+path             = "~/.brega/vault"
 unlock_ttl       = "1h"
 keyring          = "auto"             # auto|secret-service|keychain|wincred|none
 passphrase_kdf   = "argon2id"
@@ -2220,7 +2228,7 @@ values = ["low", "medium", "high"]
 
 # ─── Hooks ────────────────────────────────────────────────────────────────
 [hooks]
-dir     = "~/.config/tock/hooks"
+dir     = "~/.config/brega/hooks"
 enabled = ["on-add-tagger.sh", "on-complete-zapier.py"]
 timeout = "5s"
 ```
@@ -2242,7 +2250,7 @@ hooks/
   on-focus-start-<name>
   on-focus-end-<name>
   on-sync-<name>
-  on-launch-<name>       # on `tock` startup
+  on-launch-<name>       # on `brega` startup
   on-exit-<name>
 ```
 
@@ -2259,7 +2267,7 @@ Multiple hooks per event are run alphabetically. `on-*` are *blocking* and can m
   - `2` = veto (abort the operation, print stderr to user).
   - anything else = treat as failure; user sees a warning; operation proceeds only for `after-*` hooks.
 - **Timeout**: `hooks.timeout` (default 5s). Killed and logged on overrun.
-- **Environment**: `TOCK_EVENT`, `TOCK_VAULT`, `TOCK_DEVICE_ID`, plus a freshly-minted scoped read-only API token for `tock --hook-token`.
+- **Environment**: `BREGA_EVENT`, `BREGA_VAULT`, `BREGA_DEVICE_ID`, plus a freshly-minted scoped read-only API token for `brega --hook-token`.
 
 #### Example: auto-tag based on project
 
@@ -2312,7 +2320,7 @@ The iOS app is a **thin SwiftUI shell over the Rust core via UniFFI**. No busine
 ```
 apps/ios/
   App/
-    TockApp.swift              # @main, sets up CoreActor
+    BregaApp.swift              # @main, sets up CoreActor
     AppDelegate.swift             # background tasks, notification routing
   Core/
     CoreActor.swift               # global actor wrapping UniFFI handle
@@ -2349,7 +2357,7 @@ apps/ios/
                    │ UniFFI FFI
                    ▼
    ┌─────────────────────────────┐
-   │      tock-core (Rust)      │   ← pure, no I/O outside the
+   │      brega-core (Rust)      │   ← pure, no I/O outside the
    │  SQLite vault on disk       │     storage trait it owns
    └─────────────────────────────┘
 ```
@@ -2496,7 +2504,7 @@ Updates use `WidgetKit` (watchOS 9+) timelines refreshed by the companion app on
 
 ### 8.5 Widgets (WidgetKit)
 
-Widgets share a common Swift package `WidgetCore` that owns a read-only UniFFI handle into the same vault (group container `group.com.tock.app`). Widgets do **not** mutate; tap actions deep-link or invoke App Intents.
+Widgets share a common Swift package `WidgetCore` that owns a read-only UniFFI handle into the same vault (group container `group.com.brega.app`). Widgets do **not** mutate; tap actions deep-link or invoke App Intents.
 
 | Size                   | Content                                                              |
 |------------------------|----------------------------------------------------------------------|
@@ -2518,16 +2526,16 @@ All intents are defined in Swift via `AppIntent` and delegate to `CoreActor`. Th
 
 | Intent                          | Parameters                                            | Example phrase                                    |
 |---------------------------------|-------------------------------------------------------|---------------------------------------------------|
-| `AddTaskIntent`                 | `description`, `project?`, `due?`, `tags?`            | "Add task buy milk tomorrow to Tock"             |
-| `CompleteTaskIntent`            | `task` (entity)                                       | "Mark dentist done in Tock"                      |
-| `ShowTodayIntent`               | —                                                     | "Show today in Tock"                             |
+| `AddTaskIntent`                 | `description`, `project?`, `due?`, `tags?`            | "Add task buy milk tomorrow to Brega"             |
+| `CompleteTaskIntent`            | `task` (entity)                                       | "Mark dentist done in Brega"                      |
+| `ShowTodayIntent`               | —                                                     | "Show today in Brega"                             |
 | `StartTimerIntent`              | `task?`, `note?`                                      | "Start timer on review PR"                        |
 | `StopTimerIntent`               | —                                                     | "Stop the timer"                                  |
 | `StartFocusIntent`              | `task?`, `length?`                                    | "Focus for 25 minutes on writing"                 |
 | `LogHabitIntent`                | `habit` (entity), `value?`                            | "Log meditation 10 minutes"                       |
 | `ShowHabitStreakIntent`         | `habit?`                                              | "What's my reading streak?"                       |
-| `CaptureToInboxIntent`          | `text`                                                | "Capture think about Q4 plan to Tock inbox"      |
-| `OpenViewIntent`                | `view` (enum)                                         | "Open inbox in Tock"                             |
+| `CaptureToInboxIntent`          | `text`                                                | "Capture think about Q4 plan to Brega inbox"      |
+| `OpenViewIntent`                | `view` (enum)                                         | "Open inbox in Brega"                             |
 | `RunReportIntent`               | `report` (entity)                                     | "Run standup report"                              |
 
 `AppEntity` types (`Task`, `Habit`, `Project`, `Report`) make tasks/habits first-class in the Shortcuts app — users can build flows like "When I arrive at work → Open work context → Show Today → Start focus 50 minutes on top task." Entity queries are paged from the core.
@@ -2554,7 +2562,7 @@ Quick capture from any app: Safari page, mail message, photo, plain text.
 The extension UI is a single SwiftUI sheet:
 
 ```
-┌─ Add to Tock ─────────────────────────────┐
+┌─ Add to Brega ─────────────────────────────┐
 │ ▢ Read: "How to design CRDTs"             │
 │   <description, editable, prefilled>      │
 │                                            │
@@ -2579,7 +2587,7 @@ All import/export, hook I/O, and the `--json` flag emit the same canonical schem
 
 ```jsonc
 {
-  "$schema": "https://tock.dev/schemas/tock/v1.json",
+  "$schema": "https://brega.dev/schemas/brega/v1.json",
   "version": 1,
   "exported_at": "2025-03-13T17:45:00Z",
   "vault_id": "vlt_01HQZ...",
@@ -2724,9 +2732,9 @@ All import/export, hook I/O, and the `--json` flag emit the same canonical schem
 #### CLI
 
 ```
-tock import taskwarrior                            # uses `task export` if in PATH
-tock import taskwarrior --from ~/tw-export.json
-tock export taskwarrior --out ~/tw-import.json     # produces TW-compatible JSON
+brega import taskwarrior                            # uses `task export` if in PATH
+brega import taskwarrior --from ~/tw-export.json
+brega export taskwarrior --out ~/tw-import.json     # produces TW-compatible JSON
 ```
 
 Round-trip is **lossy in one direction** (TW → app preserves more; app → TW loses checklists, habits, time blocks, headings, identity, etc., which simply don't exist in TW). The app stores TW UUIDs in a sidecar so re-importing the same TW file is idempotent.
@@ -2735,8 +2743,8 @@ Round-trip is **lossy in one direction** (TW → app preserves more; app → TW 
 
 Things 3 doesn't have an official export, but offers AppleScript and a JSON URL scheme. We support two paths:
 
-1. **AppleScript-driven** (macOS only): `tock import things3` runs a bundled `.scpt` that walks Areas → Projects → Tasks → Headings → Checklist items → To-dos, emitting our canonical JSON.
-2. **Manual file**: `tock import things3 --from things3.json` accepts the JSON URL-scheme dump or third-party export tools (e.g. `things-cli export`).
+1. **AppleScript-driven** (macOS only): `brega import things3` runs a bundled `.scpt` that walks Areas → Projects → Tasks → Headings → Checklist items → To-dos, emitting our canonical JSON.
+2. **Manual file**: `brega import things3 --from things3.json` accepts the JSON URL-scheme dump or third-party export tools (e.g. `things-cli export`).
 
 #### Hierarchy
 
@@ -2791,14 +2799,14 @@ notes, note, description2                → note
 estimate, eta, duration                  → estimate_sec (parsed)
 ```
 
-Unmatched columns are imported as UDAs (`uda.<column_name>`) with `string` type; the user is prompted to retype them post-import (`tock uda retype <key> --type int`).
+Unmatched columns are imported as UDAs (`uda.<column_name>`) with `string` type; the user is prompted to retype them post-import (`brega uda retype <key> --type int`).
 
 #### CLI / config
 
 ```
-tock import csv --from tasks.csv                        # auto-detect
-tock import csv --from tasks.csv --map csv-map.toml     # explicit mapping
-tock export csv --columns sid,description,due,project,urgency \
+brega import csv --from tasks.csv                        # auto-detect
+brega import csv --from tasks.csv --map csv-map.toml     # explicit mapping
+brega export csv --columns sid,description,due,project,urgency \
                  --filter '+TODAY' --out today.csv
 ```
 
@@ -2906,9 +2914,9 @@ Markdown is for humans: standups, weekly reviews, shareable summaries. Templated
 CLI:
 
 ```
-tock export md --filter '+TODAY' --template ~/.config/tock/templates/standup.md
-tock report week --format md > weekly-review.md
-tock habit ls --format md > habits.md
+brega export md --filter '+TODAY' --template ~/.config/brega/templates/standup.md
+brega report week --format md > weekly-review.md
+brega habit ls --format md > habits.md
 ```
 
 ---
@@ -2921,14 +2929,14 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 
 **Complexity: High** · Depends on: nothing
 
-- Monorepo scaffolded (`crates/tock-core`, `-cli`, `-server`; `bindings/swift`; `apps/`).
+- Monorepo scaffolded (`crates/brega-core`, `-cli`, `-server`; `bindings/swift`; `apps/`).
 - Workspace `Cargo.toml`, `rust-toolchain.toml` pinned, `cargo deny`, `cargo clippy -D warnings`, `cargo fmt --check` in CI.
 - CI/CD: GitHub Actions for Linux/macOS/Windows, code coverage, release artifacts (cargo-dist), signed binaries for macOS, Homebrew tap, Nix flake.
-- Crypto primitives wrapped (AES-256-GCM, Argon2id, HKDF-SHA256, X25519, Ed25519) behind `tock-crypto` crate with property tests.
+- Crypto primitives wrapped (AES-256-GCM, Argon2id, HKDF-SHA256, X25519, Ed25519) behind `brega-crypto` crate with property tests.
 - Vault: SQLite + app-layer encryption shipped for 1.0 (`sqlite-plain-app-aead-v0`); SQLCipher deferred post-1.0 (decision resolved in [ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)); migration framework.
 - Event log skeleton (append-only, signed, deterministic IDs).
 - `tracing`-based logging with redaction filter for vault data.
-- **Testable**: `tock vault init/unlock/lock/status` works; passes property tests; round-trips encrypted writes.
+- **Testable**: `brega vault init/unlock/lock/status` works; passes property tests; round-trips encrypted writes.
 
 ### Phase 1 — CLI Task Manager MVP
 
@@ -2995,7 +3003,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
   multi-user self-host (admin + N users); SRP-6a verifier over the URK.
 - Device pairing flow (`onboard invite` / `accept`, QR + 6-word phrase) as an optional convenience.
 - Device revocation, key rotation, Emergency Kit (sole recovery path).
-- Self-hosted server (`tock-server`, Axum, AGPL-3.0): receives encrypted blobs, append-only log per vault, never sees plaintext.
+- Self-hosted server (`brega-server`, Axum, AGPL-3.0): receives encrypted blobs, append-only log per vault, never sees plaintext.
 - Container image, Helm chart, systemd unit.
 - Hosted service skeleton (same binary, billing layer, S3-compatible blob backend).
 - **Testable**: two CLI installs sync the same vault; offline edits merge cleanly; server can't decrypt.
@@ -3011,7 +3019,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - Quick-add sheet, share extension, App Intents (§8.6), interactive widgets (§8.5).
 - BGAppRefreshTask + push-triggered sync for hosted-sync users.
 - TestFlight beta.
-- **Testable**: full iPhone/iPad app; Tock App Store submission ready.
+- **Testable**: full iPhone/iPad app; Brega App Store submission ready.
 
 ### Phase 7 — macOS + watchOS + Polish
 
@@ -3033,7 +3041,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 
 ## 11. Monetization Analysis
 
-The bar to clear: **must sustain a 1–2 person team indefinitely** *and* **must not betray the Tock ethos** (privacy-first, AGPL server, open core, no dark patterns).
+The bar to clear: **must sustain a 1–2 person team indefinitely** *and* **must not betray the Brega ethos** (privacy-first, AGPL server, open core, no dark patterns).
 
 ### Model A — Fully open source, no monetization
 
@@ -3081,7 +3089,7 @@ The bar to clear: **must sustain a 1–2 person team indefinitely** *and* **must
 
 1. **All code Apache-2.0** (core, CLI, Swift bindings, iOS/macOS/watchOS apps).
 2. **Server AGPL-3.0** so a forked SaaS competitor must publish their modifications. This is the strongest defensive license without becoming user-hostile.
-3. **Apple apps free on the App Store as Tock** — distribution and discovery matter more than App Store revenue. Free apps with paid hosted sync convert; paid apps with a free CLI confuse.
+3. **Apple apps free on the App Store as Brega** — distribution and discovery matter more than App Store revenue. Free apps with paid hosted sync convert; paid apps with a free CLI confuse.
 4. **Hosted sync tiers**:
    - **Free**: single device or local-network sync only; no hosted relay.
    - **Personal $4/mo or $36/yr**: unlimited devices, hosted relay, encrypted backups, 7-day point-in-time restore.
@@ -3094,7 +3102,7 @@ The bar to clear: **must sustain a 1–2 person team indefinitely** *and* **must
 **Why this wins**:
 
 - It mirrors the proven Bitwarden / Standard Notes / Obsidian playbook in a category that genuinely lacks an open-source-first option.
-- It rewards the technical-user community (which is the Tock core audience — see the broader kafkade ecosystem) with a free, no-strings tool.
+- It rewards the technical-user community (which is the Brega core audience — see the broader kafkade ecosystem) with a free, no-strings tool.
 - It captures the "I want it to just work" segment via hosted sync, without compromising the principled offering.
 - It positions cleanly as a privacy-first, open-source-first option in a category dominated by closed and cloud-only incumbents.
 
@@ -3102,55 +3110,55 @@ The bar to clear: **must sustain a 1–2 person team indefinitely** *and* **must
 
 ## 12. Naming Decision
 
-The name is now locked to **`tock`** for the CLI and **Tock** for user-facing surfaces.
+The name is now locked to **`brega`** for the CLI and **Brega** for user-facing surfaces.
 
 ### Decision summary
 
-- **Selected name:** `tock`
+- **Selected name:** `brega`
 - **Why it won:** short, rhythmic, time-evocative, easy to type, and a strong fit for a fast CLI-first product.
-- **Product framing:** it suggests cadence and momentum through the familiar "tick-tock" association without sounding like a generic clock app.
+- **Product framing:** it suggests cadence and momentum through the familiar "tick-brega" association without sounding like a generic clock app.
 
 ### Known conflicts
 
-- **crates.io:** `tock` already exists as a digital clock crate with modest usage.
-- **App Store:** **Tock** is already used for restaurant reservations.
+- **crates.io:** `brega` already exists as a digital clock crate with modest usage.
+- **App Store:** **Brega** is already used for restaurant reservations.
 - **Assessment:** neither conflict is in the same product domain as this app, so the name remains workable.
 
 ### Packaging and distribution strategy
 
-- Publish crates under names such as `tock-core`, `tock-cli`, and `tock-server`.
-- If the root crate name is needed, prefer `tock-app` or `tock-cli` while keeping the installed binary name as **`tock`**.
-- Ship Apple clients under the display name **Tock**.
-- Use an App Store listing such as **Tock — Tasks & Habits** for clarity and differentiation.
+- Publish crates under names such as `brega-core`, `brega-cli`, and `brega-server`.
+- If the root crate name is needed, prefer `brega-app` or `brega-cli` while keeping the installed binary name as **`brega`**.
+- Ship Apple clients under the display name **Brega**.
+- Use an App Store listing such as **Brega — Tasks & Habits** for clarity and differentiation.
 
 ### CLI guidance
 
-- All command examples in this architecture now use `tock`.
+- All command examples in this architecture now use `brega`.
 - Recommend `tt` as the documented power-user shell alias in the README.
 
 ### Revisit policy
 
-The team should proceed with **tock** as the working product name, but may revisit it before launch if a clearly better option surfaces.
+The team should proceed with **brega** as the working product name, but may revisit it before launch if a clearly better option surfaces.
 
 ---
 
 ## Acknowledgments & Prior Art
 
-Tock stands on the shoulders of decades of thinking, research, and craft from the
+Brega stands on the shoulders of decades of thinking, research, and craft from the
 personal-productivity community. We want to acknowledge — explicitly and gratefully —
 the ideas and ecosystems that shaped this design:
 
 - **Getting Things Done (GTD)**, David Allen — the foundational vocabulary
   (inbox, next actions, areas, projects, contexts, weekly review) that underpins
-  Tock's view system and triage flow.
+  Brega's view system and triage flow.
 - **Atomic Habits**, James Clear — the framing of habits as identity-shaping
   practices, the cue/craving/response/reward loop, "make it obvious / attractive /
   easy / satisfying," habit stacking, and the "start small" minimum. These ideas
-  inform the structure of Tock's habit model without prescribing a particular
+  inform the structure of Brega's habit model without prescribing a particular
   methodology.
 - **Taskwarrior** — the proof that a CLI-first, query-language-driven task tool can
   serve serious knowledge workers; the inspiration for urgency-as-coefficients,
-  virtual tags, user-defined attributes, and hook-driven extensibility. Tock's
+  virtual tags, user-defined attributes, and hook-driven extensibility. Brega's
   import path (§9.2) is designed to make Taskwarrior users feel at home.
 - **The broader open-source time-tracking community** — including projects that
   pioneered ergonomic CLI time-block tracking — for showing how natural-language
@@ -3161,16 +3169,16 @@ the ideas and ecosystems that shaped this design:
   open-source-first, end-to-end-encrypted product can be commercially sustainable
   through honest hosted-sync pricing without compromising the principled offering.
 
-Tock is not a clone of any of these. It is a synthesis: a unified data model and
+Brega is not a clone of any of these. It is a synthesis: a unified data model and
 sync substrate that lets the ideas above compose with each other instead of
-living in four disconnected apps. Where prior art applies, we cite it; where Tock
+living in four disconnected apps. Where prior art applies, we cite it; where Brega
 diverges, the divergence is intentional and documented.
 
 ---
 
 ## Ecosystem
 
-Tock is one of several focused, privacy-first tools in the **kafkade** family.
+Brega is one of several focused, privacy-first tools in the **kafkade** family.
 Each tool is independently useful, but they share an architectural spine:
 
 - A pure-Rust core with the **"core has zero I/O"** invariant.
@@ -3188,7 +3196,7 @@ Each tool is independently useful, but they share an architectural spine:
 
 - **ldgr** — a personal-finance ledger and budgeting tool. Plain-text-friendly,
   double-entry-capable, with the same vault format and the same crypto/sync
-  guarantees. Tock and ldgr can coexist in the same configuration tree and share
+  guarantees. Brega and ldgr can coexist in the same configuration tree and share
   device-pairing flows; they do not share data, but they share trust.
 - **pildora** — a medication and supplement tracker with adherence logging,
   reminder scheduling, and refill tracking. Highly sensitive data; protected by

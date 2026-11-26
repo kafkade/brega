@@ -16,7 +16,7 @@
 
 ## Context
 
-Tock stores sensitive personal data: tasks, habits, time tracking, and notes. Synchronization requires transmitting this data through untrusted servers or peer-to-peer relays. Users must trust that:
+Brega stores sensitive personal data: tasks, habits, time tracking, and notes. Synchronization requires transmitting this data through untrusted servers or peer-to-peer relays. Users must trust that:
 
 1. The sync server never sees plaintext.
 2. Stolen server data remains unreadable.
@@ -27,7 +27,7 @@ We need cryptographic design that meets these requirements without introducing k
 
 ## Decision
 
-Tock uses **hierarchical key derivation with per-item envelope encryption**:
+Brega uses **hierarchical key derivation with per-item envelope encryption**:
 
 **Key hierarchy:**
 - User password → Argon2id (t=3, m=512 MiB) → Master Key (MK)
@@ -56,7 +56,7 @@ Each sync event payload is encrypted with AES-256-GCM using its unique IK, a ran
 
 **Negative:**
 - Argon2id (512 MiB, 3 iterations) takes ~2 seconds on mid-range hardware; may frustrate users on slow devices (acceptable trade-off for password hardening).
-- Rotating VK requires full vault re-encryption (a `tock vault rotate` operation).
+- Rotating VK requires full vault re-encryption (a `brega vault rotate` operation).
 
 **Neutral:**
-- Depends on audited crates: `aes-gcm`, `argon2`, `x25519-dalek`, `hkdf`. Security relies on their correctness and our implementation discipline. Note that these *primitives* are independently audited but tock's **composition** of them (this design) is **not yet** — see [ADR-015](ADR-015-pre-1.0-security-audit-status.md) for the pre-1.0 unaudited-status decision and the scope of the intended external review.
+- Depends on audited crates: `aes-gcm`, `argon2`, `x25519-dalek`, `hkdf`. Security relies on their correctness and our implementation discipline. Note that these *primitives* are independently audited but brega's **composition** of them (this design) is **not yet** — see [ADR-015](ADR-015-pre-1.0-security-audit-status.md) for the pre-1.0 unaudited-status decision and the scope of the intended external review.

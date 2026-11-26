@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "TockApp",
+    name: "BregaApp",
     platforms: [
         .iOS(.v17),
         .macOS(.v14),
@@ -13,22 +13,22 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "TockApp",
+            name: "BregaApp",
             dependencies: [
-                .product(name: "TockSwift", package: "swift"),
+                .product(name: "BregaSwift", package: "swift"),
             ],
-            path: "Sources/TockApp",
+            path: "Sources/BregaApp",
             exclude: [
-                "App/TockApp.swift",
+                "App/BregaApp.swift",
             ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
         .testTarget(
-            name: "TockAppTests",
-            dependencies: ["TockApp"],
-            path: "Tests/TockAppTests"
+            name: "BregaAppTests",
+            dependencies: ["BregaApp"],
+            path: "Tests/BregaAppTests"
         ),
     ]
 )

@@ -1,0 +1,4617 @@
+//! # brega CLI
+//!
+//! Command-line interface for brega — unified task, habit, time, and
+//! focus engine. Phase 1 implements the task management commands.
+
+mod clap_i18n;
+mod commands;
+mod config;
+mod display;
+mod hooks;
+mod http_transport;
+mod i18n;
+mod notify;
+mod tracing_setup;
+mod tui;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process;
+
+use brega_core::domain::cadence::ParsedCadence;
+use brega_core::domain::task::{NewTask, Task, TaskStatus};
+use clap::{CommandFactory, FromArgMatches, Parser};
+use commands::{
+    Commands, checklist::ChecklistCommand, context::ContextCommand, focus::FocusCommand,
+    habit::HabitCommand, hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
+};
+use display::{OutputFormat, format_task_detail, format_tasks};
+use notify::notify;
+use rusqlite::Connection;
+use serde::Serialize;
+use time::format_description::well_known::Rfc3339;
+use uuid::Uuid;
+
+/// brega — unified personal productivity engine.
+#[derive(Debug, Parser)]
+#[command(name = "brega", version, about)]
+struct Cli {
+    /// Path to the vault file.
+    #[arg(long, env = "BREGA_VAULT", default_value = "brega.bregavault")]
+    vault: PathBuf,
+
+    /// Vault password (reads from `BREGA_PASSWORD` env var; prompts if absent).
+    #[arg(long, env = "BREGA_PASSWORD", hide_env_values = true)]
+    password: Option<String>,
+
+    /// Account Secret Key (the `A4-…` string from your Emergency Kit).
+    /// Required to open an existing vault; reads from `BREGA_SECRET_KEY`.
+    /// On `init` a fresh Secret Key is generated and printed instead.
+    #[arg(long, env = "BREGA_SECRET_KEY", hide_env_values = true)]
+    secret_key: Option<String>,
+
+    /// Log format: human (default) or json.
+    #[arg(long, env = "BREGA_LOG_FORMAT", default_value = "human")]
+    log_format: String,
+
+    /// Output format: table (default), compact, json.
+    #[arg(long, default_value = "table")]
+    format: String,
+
+    /// Path to the config file (overrides `BREGA_CONFIG` and the default
+    /// `~/.config/brega/config.toml`).
+    #[arg(long, env = "BREGA_CONFIG", global = true)]
+    config: Option<PathBuf>,
+
+    /// Language for messages (BCP-47, e.g. `en-US`); overrides `BREGA_LANG`.
+    #[arg(long, env = "BREGA_LANG", global = true)]
+    lang: Option<String>,
+
+    /// Subcommand to execute.
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveContext {
+    name: String,
+    filter: String,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TaskFilterState {
+    is_blocked: bool,
+    is_blocking: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct RelatedTaskSummary {
+    sid: u32,
+    title: String,
+    status: String,
+}
+
+fn main() {
+    // Resolve the locale before building the command so `--help` output is
+    // localized too (clap renders and exits during argument parsing).
+    let lang = prescan_lang();
+    i18n::init(lang.as_deref());
+
+    let matches = clap_i18n::localize(Cli::command()).get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    tracing_setup::init_tracing(cli.log_format == "json");
+
+    if let Err(error) = run(&cli) {
+        eprintln!("{}", tr!("error-prefix", message = error.to_string()));
+        process::exit(1);
+    }
+}
+
+/// Scan raw arguments for an explicit `--lang`/`--lang=<value>` so the locale is
+/// known before clap renders any (localized) help or error output.
+fn prescan_lang() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--lang=") {
+            return Some(value.to_owned());
+        }
+        if arg == "--lang" {
+            return args.next();
+        }
+    }
+    None
+}
+
+fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    #![allow(clippy::too_many_lines)]
+    let (cfg, cfg_path) = config::load(cli.config.as_deref())?;
+
+    // Resolve the command, falling back to the configured default view when
+    // `brega` is invoked with no subcommand.
+    let default_command = Commands::View {
+        name: cfg.general.default_view.clone(),
+        json: false,
+    };
+    let command = cli.command.as_ref().unwrap_or(&default_command);
+    let urgency = cfg.urgency.to_core();
+    notify::set_enabled(cfg.notifications.enabled);
+
+    match command {
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(*shell, &mut cmd, "brega", &mut std::io::stdout());
+            return Ok(());
+        }
+        Commands::Hooks(args) => {
+            run_hooks_cmd(&args.command);
+            return Ok(());
+        }
+        Commands::Onboard(args) => {
+            return run_onboard_cmd(cli, &args.cmd);
+        }
+        Commands::Account(args) => {
+            return commands::account::run_account_cmd(cli, &args.cmd);
+        }
+        Commands::Config(args) => {
+            return run_config_cmd(&args.command, &cfg, cfg_path.as_deref());
+        }
+        Commands::Backup(args) => {
+            return run_backup_cmd(cli, &args.cmd);
+        }
+        _ => {}
+    }
+
+    let mut vault = if cli.vault.exists() {
+        let secret_key = resolve_secret_key_for_open(cli)?;
+        let password = resolve_open_password(cli)?;
+        brega_storage::open(&cli.vault, &password, &secret_key)?
+    } else {
+        first_run_init(cli)?
+    };
+
+    // Handle imports that need &mut Connection (for transactions) early.
+    if let Commands::Import {
+        format,
+        file,
+        map,
+        include_trash,
+    } = command
+        && run_transactional_import(&mut vault, format, file, map.as_deref(), *include_trash)?
+    {
+        return Ok(());
+    }
+
+    // Sync and device commands need the whole `OpenVault`, not just the
+    // connection, so handle them before the connection borrow below.
+    // Undo/redo need a mutable connection (they run in a transaction), so
+    // they are also handled here before the shared immutable borrow.
+    match command {
+        Commands::Sync(args) => return commands::sync_cmd::run_sync(&vault, args),
+        Commands::Device(args) => return commands::sync_cmd::run_device(&vault, &args.cmd),
+        Commands::Undo => return run_undo(vault.connection_mut()),
+        Commands::Redo => return run_redo(vault.connection_mut()),
+        _ => {}
+    }
+
+    let conn = vault.connection();
+    let active_context = load_active_context(conn)?;
+
+    // In-terminal idle detection: read the heartbeat recorded by the previous
+    // invocation before this command runs, then refresh it afterwards.
+    let prior_activity = brega_storage::repo::activity_repo::get_last_activity(conn)?;
+
+    // Snapshot the domain state before any mutating command so it can be
+    // reverted by `brega undo`. Read-only commands return `None` here.
+    let undo_label = undoable_label(command);
+    let undo_before = match &undo_label {
+        Some(_) => Some(brega_storage::undo::snapshot(conn)?),
+        None => None,
+    };
+
+    let result = dispatch_command(
+        conn,
+        command,
+        cli,
+        &cfg,
+        &urgency,
+        active_context.as_ref(),
+        prior_activity,
+    );
+
+    // Record the change set on the undo stack when a mutating command
+    // succeeded and actually changed something.
+    if let (Some(label), Some(before)) = (undo_label, undo_before)
+        && result.is_ok()
+    {
+        let after = brega_storage::undo::snapshot(conn)?;
+        let _ = brega_storage::undo::record(conn, &label, before, after)?;
+    }
+
+    // Refresh the activity heartbeat for the next invocation's idle check.
+    let _ = brega_storage::repo::activity_repo::touch(conn, time::OffsetDateTime::now_utc());
+
+    result
+}
+
+/// Dispatch a command that operates on an open connection. Undo/redo,
+/// sync/device, and the pre-vault commands are handled by the caller.
+fn dispatch_command(
+    conn: &Connection,
+    command: &Commands,
+    cli: &Cli,
+    cfg: &config::Config,
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+    active_context: Option<&ActiveContext>,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #![allow(clippy::too_many_lines)]
+    match command {
+        Commands::Add { .. }
+        | Commands::Modify { .. }
+        | Commands::Done { .. }
+        | Commands::Cancel { .. }
+        | Commands::Delete { .. }
+        | Commands::Depend { .. }
+        | Commands::Undepend { .. }
+        | Commands::Schedule { .. }
+        | Commands::Unschedule { .. }
+        | Commands::Annotate { .. }
+        | Commands::Denotate { .. }
+        | Commands::List { .. }
+        | Commands::Show { .. }
+        | Commands::Urgency { .. } => {
+            run_task_cmd(conn, command, &cli.format, active_context, urgency)
+        }
+        Commands::Project(args) => run_project_cmd(conn, &args.command),
+        Commands::Area(args) => run_area_cmd(conn, &args.command),
+        Commands::Tag(args) => run_tag_cmd(conn, &args.command),
+        Commands::Report(args) => run_report_cmd(conn, &args.command, active_context),
+        Commands::Context(args) => run_context_cmd(conn, &args.command),
+        Commands::Time(args) => run_time_cmd(conn, &args.command, &cfg.time, prior_activity),
+        Commands::Focus(args) => run_focus_cmd(conn, &args.command, cfg, prior_activity),
+        Commands::Habit(args) => run_habit_cmd(conn, &args.command),
+        Commands::Uda(args) => run_uda_cmd(conn, &args.command, cfg),
+        Commands::Checklist(args) => run_checklist_cmd(conn, &args.command),
+        Commands::Tui => {
+            tui::run(conn, cfg, urgency)?;
+            Ok(())
+        }
+        Commands::View { name, json } => {
+            run_view_cmd(conn, name, *json, &cli.format, active_context)
+        }
+        Commands::Views => {
+            let today_str = today_string();
+            for view in commands::views::all_views(&today_str) {
+                println!("  {:<12}  {}", view.name, view.description);
+            }
+            Ok(())
+        }
+        Commands::Agenda { when } => run_agenda_cmd(conn, when),
+        Commands::Caldav(args) => run_caldav_cmd(conn, args),
+        Commands::Export {
+            format,
+            out,
+            builtin,
+            template,
+            filter,
+        } => run_export_cmd(
+            conn,
+            format,
+            out.as_deref(),
+            builtin.as_deref(),
+            template.as_deref(),
+            filter,
+        ),
+        Commands::Import { format, file, .. } => {
+            if format.eq_ignore_ascii_case("json") {
+                let contents = std::fs::read_to_string(file)?;
+                let count = brega_import::json::import_tasks(conn, &contents)?;
+                println!("{}", tr!("import-done", count = usize_to_i64(count)));
+            } else {
+                eprintln!("{}", tr!("import-unsupported-format", format = format));
+            }
+            Ok(())
+        }
+        Commands::Completions { .. } => unreachable!("completions handled before vault open"),
+        Commands::Hooks(_) => unreachable!("hooks handled before vault open"),
+        Commands::Onboard(_) => unreachable!("onboard handled before vault open"),
+        Commands::Account(_) => unreachable!("account handled before vault open"),
+        Commands::Config(_) => unreachable!("config handled before vault open"),
+        Commands::Sync(_) | Commands::Device(_) => {
+            unreachable!("sync/device handled before connection borrow")
+        }
+        Commands::Backup(_) => {
+            unreachable!("backup handled before vault open")
+        }
+        Commands::Undo | Commands::Redo => {
+            unreachable!("undo/redo handled before connection borrow")
+        }
+    }
+}
+
+/// Human label for a mutating command, used both to decide whether the
+/// command is undoable and for the `Undid: <label>` feedback line.
+/// Returns `None` for read-only or pre-vault commands.
+fn undoable_label(command: &Commands) -> Option<String> {
+    let label = match command {
+        Commands::Add { .. } => "add".to_owned(),
+        Commands::Modify { sid, .. } => format!("modify #{sid}"),
+        Commands::Done { sids } => format!("done {}", join_sids(sids)),
+        Commands::Cancel { sids } => format!("cancel {}", join_sids(sids)),
+        Commands::Delete { sids } => format!("delete {}", join_sids(sids)),
+        Commands::Depend { sid, on } => format!("depend #{sid} on #{on}"),
+        Commands::Undepend { sid, from } => format!("undepend #{sid} from #{from}"),
+        Commands::Schedule { sid, .. } => format!("schedule #{sid}"),
+        Commands::Unschedule { sid } => format!("unschedule #{sid}"),
+        Commands::Checklist(_) => "checklist".to_owned(),
+        Commands::Annotate { sid, .. } => format!("annotate #{sid}"),
+        Commands::Denotate { sid, index } => format!("denotate #{sid} [{index}]"),
+        Commands::Project(_) => "project".to_owned(),
+        Commands::Area(_) => "area".to_owned(),
+        Commands::Tag(_) => "tag".to_owned(),
+        Commands::Report(_) => "report".to_owned(),
+        Commands::Context(_) => "context".to_owned(),
+        Commands::Time(_) => "time".to_owned(),
+        Commands::Focus(_) => "focus".to_owned(),
+        Commands::Habit(_) => "habit".to_owned(),
+        Commands::Uda(_) => "uda".to_owned(),
+        Commands::Caldav(_) => "caldav".to_owned(),
+        _ => return None,
+    };
+    Some(label)
+}
+
+fn join_sids(sids: &[u32]) -> String {
+    sids.iter()
+        .map(|s| format!("#{s}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Revert the most recent mutating command.
+fn run_undo(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    match brega_storage::undo::undo(conn)? {
+        Some(outcome) => println!("{}", tr!("undo-done", action = outcome.label.as_str())),
+        None => println!("{}", tr!("undo-empty")),
+    }
+    Ok(())
+}
+
+/// Re-apply the most recently undone command.
+fn run_redo(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    match brega_storage::undo::redo(conn)? {
+        Some(outcome) => println!("{}", tr!("redo-done", action = outcome.label.as_str())),
+        None => println!("{}", tr!("redo-empty")),
+    }
+    Ok(())
+}
+
+/// Handle `brega onboard` subcommands. Invite opens the existing vault;
+/// Accept creates a fresh vault, so this runs before the normal
+/// open-or-init path in [`run`].
+/// Resolve the account Secret Key for opening an existing vault.
+///
+/// # Errors
+/// Returns an error if no Secret Key was supplied or it fails to parse.
+fn resolve_secret_key(
+    opt: Option<&str>,
+) -> Result<brega_crypto::SecretKey, Box<dyn std::error::Error>> {
+    let raw = opt.ok_or(
+        "missing account Secret Key: pass --secret-key or set BREGA_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit)",
+    )?;
+    let (_account_id, secret_key) = brega_crypto::SecretKey::parse(raw)
+        .map_err(|_| "invalid account Secret Key: check the Emergency-Kit string and try again")?;
+    Ok(secret_key)
+}
+
+/// Print the freshly generated account Secret Key as an Emergency Kit.
+///
+/// This is the only time the Secret Key is shown; it is never stored in the
+/// vault file or sent to any server.
+fn print_emergency_kit(secret_key: &brega_crypto::SecretKey, account_id: Uuid) {
+    let kit = secret_key.to_emergency_kit(account_id.as_bytes());
+    println!();
+    println!("============================ EMERGENCY KIT ============================");
+    println!("  Your account Secret Key (write it down and keep it safe):");
+    println!();
+    println!("    {kit}");
+    println!();
+    println!("  You need BOTH your password AND this Secret Key to open the vault.");
+    println!("  It is shown ONLY once and is never stored or transmitted. If you");
+    println!("  lose it, the vault cannot be recovered.");
+    println!("======================================================================");
+    println!();
+}
+
+// ── First-run local onboarding gate (#198) ───────────────────────────
+//
+// The first command that would create a vault runs an onboarding gate that
+// forces a real (non-empty) password and a saved Emergency Kit, keeping the
+// two-secret model (password + Secret Key) intact instead of collapsing to an
+// empty default. It triggers ONLY on first init; existing vaults are untouched.
+// `brega account signup` and `brega onboard` keep their own paths (dispatched
+// before this one), so the gate never fires for them.
+
+/// Coarse password-strength buckets for basic first-run feedback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasswordStrength {
+    Weak,
+    Fair,
+    Strong,
+}
+
+impl PasswordStrength {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Weak => "weak",
+            Self::Fair => "fair",
+            Self::Strong => "strong",
+        }
+    }
+}
+
+/// Dependency-free strength heuristic: scores length and character-class
+/// variety (lower / upper / digit / symbol). Length dominates so long
+/// passphrases score well. This only drives feedback — the gate rejects **only**
+/// an empty password, never a weak one.
+fn password_strength(pw: &str) -> PasswordStrength {
+    let len = pw.chars().count();
+    let classes = u32::from(pw.chars().any(char::is_lowercase))
+        + u32::from(pw.chars().any(char::is_uppercase))
+        + u32::from(pw.chars().any(char::is_numeric))
+        + u32::from(
+            pw.chars()
+                .any(|c| !c.is_alphanumeric() && !c.is_whitespace()),
+        );
+    if len >= 16 || (len >= 12 && classes >= 2) {
+        PasswordStrength::Strong
+    } else if len >= 12 || (len >= 8 && classes >= 2) {
+        PasswordStrength::Fair
+    } else {
+        PasswordStrength::Weak
+    }
+}
+
+/// Validate a candidate first-run password. Empty is rejected; anything else is
+/// accepted with its (advisory) strength.
+fn validate_first_run_password(pw: &str) -> Result<PasswordStrength, &'static str> {
+    if pw.is_empty() {
+        Err("password must not be empty")
+    } else {
+        Ok(password_strength(pw))
+    }
+}
+
+/// Whether stdin and stderr are both attached to a terminal, i.e. we may prompt.
+fn stdio_is_interactive() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Read a secret with terminal echo disabled. The prompt goes to stderr so
+/// stdout stays clean for machine-readable output (e.g. the Emergency Kit).
+fn read_secret(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::Write as _;
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    Ok(rpassword::read_password()?)
+}
+
+/// Prompt (on stderr) for a single line of visible input. Returns `None` on EOF.
+fn prompt_line_stderr(prompt: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use std::io::Write as _;
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(line.trim().to_string()))
+}
+
+/// Interactively choose a non-empty password, confirming it and echoing basic
+/// strength feedback. Loops until a valid, matching password is entered.
+fn prompt_new_password() -> Result<String, Box<dyn std::error::Error>> {
+    loop {
+        let pw = read_secret("Choose a vault password: ")?;
+        let strength = match validate_first_run_password(&pw) {
+            Ok(strength) => strength,
+            Err(msg) => {
+                eprintln!("  {msg}; try again.");
+                continue;
+            }
+        };
+        let confirm = read_secret("Confirm password: ")?;
+        if confirm != pw {
+            eprintln!("  passwords did not match; try again.");
+            continue;
+        }
+        eprintln!("  password strength: {}", strength.label());
+        if strength == PasswordStrength::Weak {
+            eprintln!(
+                "  tip: a longer passphrase (16+ chars, or 12+ with mixed \
+                 character types) is stronger."
+            );
+        }
+        return Ok(pw);
+    }
+}
+
+/// Require the user to explicitly acknowledge they saved the Emergency Kit.
+fn confirm_saved_kit() -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        let ans = prompt_line_stderr("Type \"I saved it\" to continue: ")?;
+        match ans.as_deref().map(str::trim).map(str::to_ascii_lowercase) {
+            Some(a) if a == "i saved it" || a == "yes" || a == "y" => return Ok(()),
+            Some(a) if a.is_empty() => {
+                eprintln!("  save the Emergency Kit above, then type: I saved it");
+            }
+            Some(_) => {
+                eprintln!("  save the Emergency Kit above, then type: I saved it");
+            }
+            None => {
+                return Err("onboarding aborted: Emergency Kit not confirmed. Your \
+                            Secret Key is cached in the OS keyring; re-run once you \
+                            have saved the kit."
+                    .into());
+            }
+        }
+    }
+}
+
+/// Cache the freshly generated Secret Key (never the password) so subsequent
+/// commands can open the vault without re-entering the `A4-…` string. Reuses the
+/// account keyring store (honors `BREGA_NO_KEYRING`, file fallback).
+fn cache_local_secret_key(
+    name: &str,
+    secret_key: &brega_crypto::SecretKey,
+    account_id: Uuid,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_account::{AccountCredentials, CredentialStore as _};
+    use commands::account::KeyringStore;
+    let creds = AccountCredentials {
+        server_url: String::new(),
+        username: name.to_string(),
+        account_id: account_id.to_string(),
+        secret_key: secret_key.to_emergency_kit(account_id.as_bytes()),
+        bearer_token: String::new(),
+        channel_binding: String::new(),
+        expires_at: 0,
+    };
+    KeyringStore.save(&creds)
+}
+
+/// Load a previously cached Secret Key (`A4-…`) from the account keyring store.
+fn load_cached_secret_key() -> Option<String> {
+    use brega_account::CredentialStore as _;
+    use commands::account::KeyringStore;
+    match KeyringStore.load() {
+        Ok(Some(creds)) if !creds.secret_key.is_empty() => Some(creds.secret_key),
+        _ => None,
+    }
+}
+
+/// First-run onboarding gate: force a real password, name the local account,
+/// show + confirm the Emergency Kit, cache the Secret Key, and return the open
+/// vault. Degrades cleanly in non-interactive/scripted mode.
+fn first_run_init(cli: &Cli) -> Result<brega_storage::OpenVault, Box<dyn std::error::Error>> {
+    tracing::info!("vault does not exist, running first-run onboarding");
+    let interactive = stdio_is_interactive();
+
+    // (AC #1) Force a non-empty password.
+    let password = match cli.password.as_deref() {
+        Some("") => {
+            return Err("refusing to create a vault with an empty password: pass a \
+                        non-empty --password / BREGA_PASSWORD"
+                .into());
+        }
+        Some(pw) => pw.to_string(),
+        None if interactive => prompt_new_password()?,
+        None => {
+            return Err("refusing to create a vault with an empty password: pass \
+                        --password / BREGA_PASSWORD, or run in an interactive terminal \
+                        to be prompted"
+                .into());
+        }
+    };
+
+    // (AC #2) Name the local account. Email-free until adopt (ADR-016 §9/Q1).
+    let name = if interactive {
+        match prompt_line_stderr("Name this local account [local]: ")? {
+            Some(entered) if !entered.is_empty() => entered,
+            _ => "local".to_string(),
+        }
+    } else {
+        "local".to_string()
+    };
+    if interactive {
+        eprintln!(
+            "  This account stays local and email-free. Add a server + email later \
+             with `brega account adopt`."
+        );
+    }
+
+    // Create the vault (no format change — stays v2, ADR-013).
+    let (vault, secret_key) = brega_storage::init(&cli.vault, password.as_bytes())?;
+    let account_id = vault.header().account_id;
+
+    // (AC #3) Show the Emergency Kit once; require an explicit save confirmation.
+    print_emergency_kit(&secret_key, account_id);
+    if interactive {
+        confirm_saved_kit()?;
+    }
+
+    // (AC #4) Cache the Secret Key so later commands don't re-prompt for it.
+    if let Err(err) = cache_local_secret_key(&name, &secret_key, account_id) {
+        tracing::warn!(error = %err, "could not cache Secret Key");
+        eprintln!(
+            "  note: could not cache the Secret Key ({err}); keep your Emergency Kit \
+             — you will need it for future commands."
+        );
+    }
+
+    Ok(vault)
+}
+
+/// Resolve the account Secret Key for opening an existing vault, falling back to
+/// a cached key when neither `--secret-key` nor `BREGA_SECRET_KEY` is set.
+fn resolve_secret_key_for_open(
+    cli: &Cli,
+) -> Result<brega_crypto::SecretKey, Box<dyn std::error::Error>> {
+    if let Some(raw) = cli.secret_key.as_deref() {
+        let (_account_id, secret_key) = brega_crypto::SecretKey::parse(raw).map_err(
+            |_| "invalid account Secret Key: check the Emergency-Kit string and try again",
+        )?;
+        return Ok(secret_key);
+    }
+    if let Some(raw) = load_cached_secret_key()
+        && let Ok((_account_id, secret_key)) = brega_crypto::SecretKey::parse(&raw)
+    {
+        return Ok(secret_key);
+    }
+    Err(
+        "missing account Secret Key: pass --secret-key or set BREGA_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit)"
+            .into(),
+    )
+}
+
+/// Resolve the password for opening an existing vault. Prefers
+/// `--password` / `BREGA_PASSWORD`; otherwise prompts on an interactive terminal;
+/// otherwise falls back to the legacy empty default so pre-existing
+/// empty-password vaults keep opening unchanged in scripts.
+fn resolve_open_password(cli: &Cli) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if let Some(pw) = cli.password.as_deref() {
+        return Ok(pw.as_bytes().to_vec());
+    }
+    if stdio_is_interactive() {
+        return Ok(read_secret("Vault password: ")?.into_bytes());
+    }
+    Ok(Vec::new())
+}
+
+fn run_onboard_cmd(
+    cli: &Cli,
+    cmd: &commands::sync_cmd::OnboardCmd,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use commands::sync_cmd::OnboardCmd;
+
+    let password = cli.password.as_deref().map_or(b"" as &[u8], str::as_bytes);
+    match cmd {
+        OnboardCmd::Invite { server } => {
+            if !cli.vault.exists() {
+                return Err("vault does not exist; nothing to invite from".into());
+            }
+            let secret_key = resolve_secret_key(cli.secret_key.as_deref())?;
+            let vault = brega_storage::open(&cli.vault, password, &secret_key)?;
+            commands::sync_cmd::run_onboard_invite(&vault, server.as_deref())
+        }
+        OnboardCmd::Accept {
+            server,
+            vault_id,
+            inviter_pubkey,
+            inviter_fingerprint,
+        } => commands::sync_cmd::run_onboard_accept(
+            &cli.vault,
+            password,
+            cli.secret_key.as_deref(),
+            server,
+            vault_id,
+            inviter_pubkey,
+            inviter_fingerprint,
+        ),
+    }
+}
+
+/// Handle `brega backup` subcommands.
+///
+/// Runs before the normal open-or-init path in [`run`]: `create` opens the
+/// existing vault itself, while `restore`'s target vault may not exist yet
+/// (disaster recovery), so it must not trigger `first_run_init`.
+fn run_backup_cmd(
+    cli: &Cli,
+    cmd: &commands::backup::BackupCmd,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use commands::backup::BackupCmd;
+
+    match cmd {
+        BackupCmd::Create { out } => {
+            if !cli.vault.exists() {
+                return Err("vault does not exist; nothing to back up".into());
+            }
+            let secret_key = resolve_secret_key_for_open(cli)?;
+            let password = resolve_open_password(cli)?;
+            let vault = brega_storage::open(&cli.vault, &password, &secret_key)?;
+            commands::backup::run_create(&vault, out.as_deref())
+        }
+        BackupCmd::Restore { file, mode, force } => {
+            let (account_id, secret_key) = resolve_secret_key_with_account(cli)?;
+            let password = resolve_open_password(cli)?;
+            commands::backup::run_restore(
+                &cli.vault,
+                file,
+                &password,
+                &secret_key,
+                account_id,
+                (*mode).into(),
+                *force,
+            )
+        }
+    }
+}
+
+/// Resolve the Secret Key **and its account id** for a restore. Mirrors
+/// [`resolve_secret_key_for_open`] but keeps the account id, which restore
+/// needs to reject cross-account archives.
+fn resolve_secret_key_with_account(
+    cli: &Cli,
+) -> Result<([u8; 16], brega_crypto::SecretKey), Box<dyn std::error::Error>> {
+    if let Some(raw) = cli.secret_key.as_deref() {
+        return brega_crypto::SecretKey::parse(raw).map_err(|_| {
+            "invalid account Secret Key: check the Emergency-Kit string and try again".into()
+        });
+    }
+    if let Some(raw) = load_cached_secret_key()
+        && let Ok(parsed) = brega_crypto::SecretKey::parse(&raw)
+    {
+        return Ok(parsed);
+    }
+    Err(
+        "missing account Secret Key: pass --secret-key or set BREGA_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit)"
+            .into(),
+    )
+}
+
+/// Handle import formats that require `&mut Connection` (for transactions).
+/// Returns `true` if the import was handled, `false` if the format needs
+/// the normal (immutable) code path.
+fn run_transactional_import(
+    vault: &mut brega_storage::OpenVault,
+    format: &str,
+    file: &std::path::Path,
+    map: Option<&std::path::Path>,
+    include_trash: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if format.eq_ignore_ascii_case("taskwarrior") {
+        let contents = std::fs::read_to_string(file)?;
+        let conn_mut = vault.connection_mut();
+        let report = brega_import::taskwarrior::import_taskwarrior(conn_mut, &contents)?;
+        print!("{report}");
+        return Ok(true);
+    }
+    if format.eq_ignore_ascii_case("things3") {
+        let contents = std::fs::read_to_string(file)?;
+        let conn_mut = vault.connection_mut();
+        let report = brega_import::things3::import_things3(conn_mut, &contents, include_trash)?;
+        print!("{report}");
+        return Ok(true);
+    }
+    if format.eq_ignore_ascii_case("csv") {
+        let contents = std::fs::read_to_string(file)?;
+        let mapping_toml = map.map(std::fs::read_to_string).transpose()?;
+        let conn_mut = vault.connection_mut();
+        let report =
+            brega_import::csv_import::import_csv(conn_mut, &contents, mapping_toml.as_deref())?;
+        print!("{report}");
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Handle `brega caldav` subcommands.
+fn run_caldav_cmd(
+    conn: &Connection,
+    args: &commands::caldav::CalDavArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_storage::repo::caldav_link_repo;
+    use commands::caldav::CalDavCmd;
+
+    match &args.cmd {
+        CalDavCmd::Setup {
+            url: _,
+            user,
+            collection,
+            name,
+            password_stdin: _,
+        } => caldav_setup(conn, user, collection, name.as_deref()),
+        CalDavCmd::Sync {
+            collection,
+            dry_run,
+        } => caldav_sync(conn, collection.as_deref(), *dry_run),
+        CalDavCmd::Status => caldav_status(conn),
+        CalDavCmd::Remove { url } => {
+            caldav_link_repo::delete_collection(conn, url)?;
+            println!("{}", tr!("caldav-collection-removed", url = url));
+            println!("{}", tr!("caldav-all-links-deleted"));
+            Ok(())
+        }
+    }
+}
+
+/// Register a `CalDAV` collection.
+fn caldav_setup(
+    conn: &Connection,
+    user: &str,
+    collection: &str,
+    name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_storage::repo::caldav_link_repo;
+
+    let row = caldav_link_repo::CalDavCollectionRow {
+        url: collection.into(),
+        display_name: name.map(String::from),
+        sync_token: None,
+        ctag: None,
+        username: user.into(),
+        last_sync_at: None,
+    };
+    caldav_link_repo::upsert_collection(conn, &row)?;
+    println!(
+        "{}",
+        tr!(
+            "caldav-collection-configured",
+            name = name.unwrap_or(collection)
+        )
+    );
+    println!("  {}", tr!("caldav-setup-url", url = collection));
+    println!("  {}", tr!("caldav-setup-user", user = user));
+    println!("\n{}", tr!("caldav-setup-hint"));
+    Ok(())
+}
+
+/// Run `CalDAV` sync for one or all collections.
+#[allow(clippy::too_many_lines)]
+fn caldav_sync(
+    conn: &Connection,
+    collection: Option<&str>,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_storage::repo::caldav_link_repo;
+
+    let collections = if let Some(url) = collection {
+        let Some(c) = caldav_link_repo::get_collection(conn, url)? else {
+            eprintln!("{}", tr!("caldav-no-collection-at", url = url));
+            eprintln!("{}", tr!("caldav-run-setup-first"));
+            return Ok(());
+        };
+        vec![c]
+    } else {
+        caldav_link_repo::list_collections(conn)?
+    };
+
+    if collections.is_empty() {
+        eprintln!("{}", tr!("caldav-no-collections"));
+        eprintln!("{}", tr!("caldav-run-setup-to-add"));
+        return Ok(());
+    }
+
+    for col in &collections {
+        let name = col.display_name.as_deref().unwrap_or(&col.url);
+        println!("{}", tr!("caldav-syncing-collection", name = name));
+
+        let tasks = brega_storage::repo::task_repo::list(conn, false)?;
+        let time_blocks = brega_storage::repo::time_block_repo::list(conn, true)?;
+        let links = caldav_link_repo::list_links(conn, &col.url)?;
+
+        let sync_links: Vec<brega_caldav::sync::CalDavLink> = links
+            .iter()
+            .filter_map(|l| {
+                brega_caldav::sync::EntityType::from_str_opt(&l.entity_type).map(|et| {
+                    brega_caldav::sync::CalDavLink {
+                        local_id: l.local_id,
+                        entity_type: et,
+                        collection_url: l.collection_url.clone(),
+                        href: l.href.clone(),
+                        uid: l.uid.clone(),
+                        etag: l.etag.clone(),
+                        last_pushed_at: l.last_pushed_at.clone(),
+                        last_pulled_at: l.last_pulled_at.clone(),
+                    }
+                })
+            })
+            .collect();
+
+        let push_actions =
+            brega_caldav::sync::compute_push_actions(&tasks, &time_blocks, &sync_links, &col.url);
+
+        if dry_run {
+            println!(
+                "  {}",
+                tr!(
+                    "caldav-dry-run-push-count",
+                    count = usize_to_i64(push_actions.len())
+                )
+            );
+            for action in &push_actions {
+                if let brega_caldav::sync::SyncAction::Push {
+                    entity_type,
+                    href,
+                    etag,
+                    ..
+                } = action
+                {
+                    let op = if etag.is_some() {
+                        tr!("caldav-sync-op-update")
+                    } else {
+                        tr!("caldav-sync-op-create")
+                    };
+                    println!("    {op} {} → {href}", entity_type.as_str());
+                }
+            }
+            println!("  {}", tr!("caldav-dry-run-note"));
+        } else {
+            println!(
+                "  {}",
+                tr!(
+                    "caldav-sync-summary",
+                    tasks = usize_to_i64(tasks.len()),
+                    blocks = usize_to_i64(time_blocks.len()),
+                    links = usize_to_i64(sync_links.len())
+                )
+            );
+            println!(
+                "  {}",
+                tr!(
+                    "caldav-sync-push-count",
+                    count = usize_to_i64(push_actions.len())
+                )
+            );
+            eprintln!("  {}", tr!("caldav-sync-transport-note"));
+            eprintln!("  {}", tr!("caldav-sync-transport-not-wired"));
+        }
+    }
+    Ok(())
+}
+
+/// Show `CalDAV` sync status.
+fn caldav_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_storage::repo::caldav_link_repo;
+
+    let collections = caldav_link_repo::list_collections(conn)?;
+    if collections.is_empty() {
+        println!("{}", tr!("caldav-no-collections"));
+        println!("{}", tr!("caldav-run-setup-to-add"));
+        return Ok(());
+    }
+    println!("{}\n", tr!("caldav-collections-header"));
+    for col in &collections {
+        let unnamed = tr!("caldav-unnamed");
+        let name = col.display_name.as_deref().unwrap_or(&unnamed);
+        println!("  {name}");
+        println!("    {}", tr!("caldav-status-url", url = col.url.as_str()));
+        println!(
+            "    {}",
+            tr!("caldav-status-user", user = col.username.as_str())
+        );
+        if let Some(ref token) = col.sync_token {
+            println!("    {}", tr!("caldav-status-sync-token", token = token));
+        }
+        if let Some(ref last) = col.last_sync_at {
+            println!("    {}", tr!("caldav-status-last-sync", time = last));
+        } else {
+            println!("    {}", tr!("caldav-status-last-sync-never"));
+        }
+        let links = caldav_link_repo::list_links(conn, &col.url)?;
+        println!(
+            "    {}",
+            tr!("caldav-status-linked", count = usize_to_i64(links.len()))
+        );
+        println!();
+    }
+    Ok(())
+}
+
+/// Handle `brega export md` — render Markdown via Tera templates.
+/// Dispatch `brega export <format>`.
+fn run_export_cmd(
+    conn: &Connection,
+    format: &str,
+    out: Option<&std::path::Path>,
+    builtin: Option<&str>,
+    template_path: Option<&std::path::Path>,
+    filter: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if format.eq_ignore_ascii_case("json") {
+        export_plaintext_warning();
+        let json = brega_export::json::export_tasks(conn)?;
+        match out {
+            Some(path) => std::fs::write(path, &json)?,
+            None => println!("{json}"),
+        }
+    } else if format.eq_ignore_ascii_case("md") || format.eq_ignore_ascii_case("markdown") {
+        export_plaintext_warning();
+        run_export_md(conn, out, builtin, template_path, filter)?;
+    } else {
+        eprintln!("{}", tr!("export-unsupported-format", format = format));
+    }
+    Ok(())
+}
+
+/// (AC #5, ADR-018 §5) Loud, explicit stderr warning that `brega export`
+/// output is UNENCRYPTED portability data — not a backup. For an encrypted
+/// backup, users must run `brega backup create`.
+fn export_plaintext_warning() {
+    eprintln!(
+        "WARNING: `brega export` writes UNENCRYPTED plaintext for portability — \
+         it is NOT a backup.\n\
+         \x20        Anyone who reads the output sees your task titles, notes, and \
+         habit text.\n\
+         \x20        For an encrypted, restorable backup use: brega backup create"
+    );
+}
+
+/// Handle `brega export md` — render Markdown via Tera templates.
+fn run_export_md(
+    conn: &Connection,
+    out: Option<&std::path::Path>,
+    builtin: Option<&str>,
+    template_path: Option<&std::path::Path>,
+    filter: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_export::markdown::{
+        BuiltinTemplate, TemplateSource, attach_task_annotations, build_context, render_markdown,
+    };
+
+    // Load domain data.
+    let mut tasks = brega_storage::repo::task_repo::list(conn, false)?;
+    let habits = brega_storage::repo::habit_repo::list(conn, false)?;
+    let time_blocks = brega_storage::repo::time_block_repo::list(conn, true)?;
+    let projects = brega_storage::repo::project_repo::list(conn, false)?;
+
+    // Apply task filters if provided.
+    if !filter.is_empty() {
+        let list_filter = commands::list::parse_filter(filter);
+        tasks = apply_list_filter(tasks, &list_filter, &projects);
+    }
+
+    // Determine template source.
+    let custom_content;
+    let template_source = if let Some(path) = template_path {
+        custom_content = std::fs::read_to_string(path)?;
+        TemplateSource::Custom(&custom_content)
+    } else {
+        let bt = builtin
+            .map(BuiltinTemplate::parse_name)
+            .transpose()
+            .map_err(|e| format!("{e}"))?
+            .unwrap_or(BuiltinTemplate::TaskList);
+        TemplateSource::Builtin(bt)
+    };
+
+    let context = build_context(&tasks, &habits, &time_blocks, &projects);
+    let mut context = context;
+    attach_task_annotations(conn, &tasks, &mut context).map_err(|e| format!("{e}"))?;
+    let md = render_markdown(&context, &template_source).map_err(|e| format!("{e}"))?;
+
+    match out {
+        Some(path) => std::fs::write(path, &md)?,
+        None => print!("{md}"),
+    }
+    Ok(())
+}
+
+/// Apply a basic list filter to tasks, matching the existing list command logic.
+fn apply_list_filter(
+    tasks: Vec<Task>,
+    filter: &commands::list::ListFilter,
+    projects: &[brega_core::domain::project::Project],
+) -> Vec<Task> {
+    let project_map: HashMap<uuid::Uuid, String> =
+        projects.iter().map(|p| (p.id, p.name.clone())).collect();
+
+    tasks
+        .into_iter()
+        .filter(|t| {
+            if let Some(ref status) = filter.status
+                && t.status.as_str() != status
+            {
+                return false;
+            }
+            if let Some(ref project) = filter.project {
+                let name = t
+                    .project_id
+                    .and_then(|id| project_map.get(&id))
+                    .map_or("", String::as_str);
+                if !name.eq_ignore_ascii_case(project) {
+                    return false;
+                }
+            }
+            if let Some(ref tag) = filter.tag
+                && !t.tags.iter().any(|tg| tg.eq_ignore_ascii_case(tag))
+            {
+                return false;
+            }
+            if let Some(ref priority) = filter.priority {
+                let p_str = t
+                    .priority
+                    .as_ref()
+                    .map(|p| p.as_char().to_string())
+                    .unwrap_or_default();
+                if !p_str.eq_ignore_ascii_case(priority) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_task_cmd(
+    conn: &Connection,
+    cmd: &Commands,
+    global_format: &str,
+    active_context: Option<&ActiveContext>,
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        Commands::Add { words, recur, .. } => run_add_cmd(conn, words, recur.as_deref(), urgency)?,
+        Commands::Modify { sid, args } => {
+            let patch = commands::modify::parse_modify_args(args);
+            let task = brega_storage::repo::task_repo::update(conn, *sid, &patch, urgency)?;
+            println!(
+                "{}",
+                tr!(
+                    "task-modified",
+                    sid = i64::from(task.sid),
+                    title = task.title.as_str()
+                )
+            );
+        }
+        Commands::Done { sids } => {
+            for sid in sids {
+                let task = brega_storage::repo::task_repo::set_status(
+                    conn,
+                    *sid,
+                    commands::done::done_status(),
+                    urgency,
+                )?;
+                // Auto-stop any active focus session linked to this task.
+                if let Some(active) = brega_storage::repo::focus_repo::get_active(conn)?
+                    && active.task_id == Some(task.id)
+                {
+                    let _ = brega_storage::repo::focus_repo::abort(conn, active.sid);
+                    println!(
+                        "  {}",
+                        tr!("task-auto-stopped-focus", sid = i64::from(active.sid))
+                    );
+                }
+                // Auto-stop any running time block linked to this task.
+                if let Some(running) = brega_storage::repo::time_block_repo::get_current(conn)?
+                    && running.task_id == Some(task.id)
+                {
+                    let _ = brega_storage::repo::time_block_repo::stop(conn, running.sid);
+                    println!(
+                        "  {}",
+                        tr!("task-auto-stopped-timer", sid = i64::from(running.sid))
+                    );
+                }
+                println!(
+                    "{}",
+                    tr!(
+                        "task-completed",
+                        sid = i64::from(task.sid),
+                        title = task.title.as_str()
+                    )
+                );
+                let _ = hooks::run_hook(hooks::HookEvent::OnComplete, &task_to_hook_json(&task));
+            }
+        }
+        Commands::Cancel { sids } => {
+            for sid in sids {
+                let task = brega_storage::repo::task_repo::set_status(
+                    conn,
+                    *sid,
+                    commands::done::cancel_status(),
+                    urgency,
+                )?;
+                println!(
+                    "{}",
+                    tr!(
+                        "task-cancelled",
+                        sid = i64::from(task.sid),
+                        title = task.title.as_str()
+                    )
+                );
+            }
+        }
+        Commands::Delete { sids } => {
+            for sid in sids {
+                brega_storage::repo::task_repo::soft_delete(conn, *sid)?;
+                println!("{}", tr!("task-deleted", sid = i64::from(*sid)));
+            }
+        }
+        Commands::Depend { sid, on } => {
+            brega_storage::repo::task_repo::add_dependency(conn, *sid, *on, urgency)?;
+            println!(
+                "{}",
+                tr!("depend-added", sid = i64::from(*sid), on = i64::from(*on))
+            );
+        }
+        Commands::Undepend { sid, from } => {
+            brega_storage::repo::task_repo::remove_dependency(conn, *sid, *from, urgency)?;
+            println!(
+                "{}",
+                tr!(
+                    "depend-removed",
+                    sid = i64::from(*sid),
+                    from = i64::from(*from)
+                )
+            );
+        }
+        Commands::Schedule { sid, when } => run_schedule_cmd(conn, *sid, when, urgency)?,
+        Commands::Unschedule { sid } => run_unschedule_cmd(conn, *sid, urgency)?,
+        Commands::Annotate { sid, words } => {
+            if let Some(task) = brega_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                let body = words.join(" ");
+                let body = body.trim();
+                if body.is_empty() {
+                    eprintln!("{}", tr!("annotate-empty"));
+                } else {
+                    brega_storage::repo::annotation_repo::add(
+                        conn,
+                        &brega_core::domain::annotation::NewAnnotation::for_task(task.id, body),
+                    )?;
+                    println!("{}", tr!("annotate-added", sid = i64::from(*sid)));
+                }
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
+        }
+        Commands::Denotate { sid, index } => {
+            if let Some(task) = brega_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                match brega_storage::repo::annotation_repo::remove_by_index(
+                    conn,
+                    task.id,
+                    brega_core::domain::annotation::ENTITY_KIND_TASK,
+                    *index,
+                ) {
+                    Ok(_) => println!(
+                        "{}",
+                        tr!(
+                            "annotate-removed",
+                            sid = i64::from(*sid),
+                            index = i64::try_from(*index).unwrap_or(0)
+                        )
+                    ),
+                    Err(brega_storage::Error::NotFound) => eprintln!(
+                        "{}",
+                        tr!(
+                            "annotate-index-not-found",
+                            sid = i64::from(*sid),
+                            index = i64::try_from(*index).unwrap_or(0)
+                        )
+                    ),
+                    Err(other) => return Err(Box::new(other)),
+                }
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
+        }
+        Commands::List { filter, json } => {
+            let today = today_string();
+            let filter_args = filter.iter().map(String::as_str).collect::<Vec<_>>();
+            let base_filter = brega_parse::filter::parse_filter(&filter_args, &today);
+            let parsed_filter = combine_with_active_context(base_filter, active_context, &today);
+            let tasks = brega_storage::repo::task_repo::list(conn, false)?;
+            let filtered = filter_tasks(conn, tasks, &parsed_filter)?;
+            let format = selected_output_format(global_format, *json);
+            let rendered = format_tasks(&filtered, format);
+            print_task_listing(
+                &rendered,
+                filtered.len(),
+                format,
+                active_context.map(|ctx| ctx.name.as_str()),
+            );
+        }
+        Commands::Show { sid, json } => {
+            if let Some(task) = brega_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                let format = selected_output_format(global_format, *json);
+                print_task_show(conn, &task, format)?;
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
+        }
+        Commands::Urgency { sid } => run_urgency_cmd(conn, *sid, urgency)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn run_add_cmd(
+    conn: &Connection,
+    words: &[String],
+    recur: Option<&str>,
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut parsed_task = commands::add::parse_add_input(words);
+    parsed_task.recurrence =
+        commands::add::parse_recur_flag(recur).map_err(std::io::Error::other)?;
+    let hook_input = new_task_to_hook_json(&parsed_task);
+    let Some(hooked_json) = hooks::run_hook(hooks::HookEvent::OnAdd, &hook_input) else {
+        println!("{}", tr!("task-add-cancelled-by-hook"));
+        return Ok(());
+    };
+    let new_task = new_task_from_hook_json(&parsed_task, &hooked_json)?;
+    let task = brega_storage::repo::task_repo::insert(conn, &new_task, urgency)?;
+    println!(
+        "{}",
+        tr!(
+            "task-created",
+            sid = i64::from(task.sid),
+            title = task.title.as_str()
+        )
+    );
+    Ok(())
+}
+
+fn run_schedule_cmd(
+    conn: &Connection,
+    sid: u32,
+    when: &[String],
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let raw = when.join(" ");
+    let raw = raw.trim();
+    let Some(scheduled) = commands::add::resolve_scheduled(raw) else {
+        eprintln!("{}", tr!("schedule-unparseable", input = raw));
+        return Ok(());
+    };
+    let patch = brega_core::domain::task::TaskPatch {
+        scheduled_for: Some(Some(scheduled.clone())),
+        ..brega_core::domain::task::TaskPatch::default()
+    };
+    match brega_storage::repo::task_repo::update(conn, sid, &patch, urgency) {
+        Ok(task) => println!(
+            "{}",
+            tr!(
+                "task-scheduled",
+                sid = i64::from(task.sid),
+                title = task.title.as_str(),
+                slot = scheduled.as_str()
+            )
+        ),
+        Err(brega_storage::Error::NotFound) => {
+            eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        }
+        Err(other) => return Err(Box::new(other)),
+    }
+    Ok(())
+}
+
+fn run_unschedule_cmd(
+    conn: &Connection,
+    sid: u32,
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let patch = brega_core::domain::task::TaskPatch {
+        scheduled_for: Some(None),
+        ..brega_core::domain::task::TaskPatch::default()
+    };
+    match brega_storage::repo::task_repo::update(conn, sid, &patch, urgency) {
+        Ok(task) => println!(
+            "{}",
+            tr!(
+                "task-unscheduled",
+                sid = i64::from(task.sid),
+                title = task.title.as_str()
+            )
+        ),
+        Err(brega_storage::Error::NotFound) => {
+            eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        }
+        Err(other) => return Err(Box::new(other)),
+    }
+    Ok(())
+}
+
+/// A scheduled task placed on the agenda, with its resolved time-of-day (if any).
+struct AgendaTask {
+    time: Option<time::Time>,
+    task: Task,
+    overlap: Option<String>,
+}
+
+fn run_agenda_cmd(conn: &Connection, when: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let phrase = when.join(" ");
+    let phrase = phrase.trim();
+    let target = if phrase.is_empty() {
+        today
+    } else {
+        let Some(date) = brega_parse::date::parse_date(phrase, today) else {
+            eprintln!("{}", tr!("agenda-unparseable", input = phrase));
+            return Ok(());
+        };
+        date
+    };
+    let target_str = format!(
+        "{:04}-{:02}-{:02}",
+        target.year(),
+        u8::from(target.month()),
+        target.day()
+    );
+
+    // Time blocks that start on the target day, ordered chronologically.
+    let mut blocks: Vec<brega_core::domain::time_block::TimeBlock> =
+        brega_storage::repo::time_block_repo::list(conn, true)?
+            .into_iter()
+            .filter(|block| date_of(block.start_ts) == target_str)
+            .collect();
+    blocks.sort_by_key(|block| block.start_ts);
+
+    // Scheduled tasks for the target day.
+    let mut agenda_tasks: Vec<AgendaTask> = brega_storage::repo::task_repo::list(conn, false)?
+        .into_iter()
+        .filter(|task| !task.status.is_closed())
+        .filter_map(|task| {
+            let scheduled = task.scheduled_for.as_deref()?;
+            let (date, time) = brega_parse::date::parse_datetime(scheduled, today)?;
+            let date_str = format!(
+                "{:04}-{:02}-{:02}",
+                date.year(),
+                u8::from(date.month()),
+                date.day()
+            );
+            if date_str != target_str {
+                return None;
+            }
+            let overlap = time.and_then(|slot| overlapping_block(target, slot, &blocks));
+            Some(AgendaTask {
+                time,
+                task,
+                overlap,
+            })
+        })
+        .collect();
+    // Timed tasks first (chronological), then all-day tasks.
+    agenda_tasks.sort_by(|left, right| match (left.time, right.time) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.task.sid.cmp(&right.task.sid),
+    });
+
+    println!(
+        "── {} ──",
+        tr!(
+            "agenda-header",
+            date = target_str.as_str(),
+            weekday = target.weekday().to_string()
+        )
+    );
+
+    if agenda_tasks.is_empty() && blocks.is_empty() {
+        println!("  {}", tr!("agenda-empty", date = target_str.as_str()));
+        return Ok(());
+    }
+
+    if !agenda_tasks.is_empty() {
+        println!("  {}", tr!("agenda-scheduled-heading"));
+        for entry in &agenda_tasks {
+            let slot = entry.time.map_or_else(
+                || tr!("agenda-all-day"),
+                |time| format!("{:02}:{:02}", time.hour(), time.minute()),
+            );
+            let overlap = entry
+                .overlap
+                .as_ref()
+                .map(|block| format!("  ⚠ {}", tr!("agenda-overlap", block = block.as_str())))
+                .unwrap_or_default();
+            println!(
+                "    {slot:<7} #{} {}{overlap}",
+                entry.task.sid, entry.task.title
+            );
+        }
+    }
+
+    if !blocks.is_empty() {
+        println!("  {}", tr!("agenda-blocks-heading"));
+        for block in &blocks {
+            let start = clock_of(block.start_ts);
+            let end = block.end_ts.map_or_else(|| String::from("…"), clock_of);
+            println!("    {start}–{end}  {}", block.title);
+        }
+    }
+
+    Ok(())
+}
+
+/// The `YYYY-MM-DD` date component of a timestamp.
+fn date_of(ts: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}",
+        ts.year(),
+        u8::from(ts.month()),
+        ts.day()
+    )
+}
+
+/// The `HH:MM` clock component of a timestamp.
+fn clock_of(ts: time::OffsetDateTime) -> String {
+    format!("{:02}:{:02}", ts.hour(), ts.minute())
+}
+
+/// Return the title of the first time block whose interval contains the given
+/// scheduled slot on `day`, if any.
+fn overlapping_block(
+    day: time::Date,
+    slot: time::Time,
+    blocks: &[brega_core::domain::time_block::TimeBlock],
+) -> Option<String> {
+    let moment = time::PrimitiveDateTime::new(day, slot).assume_utc();
+    blocks
+        .iter()
+        .find(|block| {
+            let starts = block.start_ts <= moment;
+            let before_end = block.end_ts.is_none_or(|end| moment < end);
+            starts && before_end
+        })
+        .map(|block| block.title.clone())
+}
+
+fn run_urgency_cmd(
+    conn: &Connection,
+    sid: u32,
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(task) = brega_storage::repo::task_repo::get_by_sid(conn, sid)? {
+        let breakdown = explain_task_urgency(
+            &task,
+            brega_storage::repo::task_repo::is_blocked(conn, task.id)?,
+            urgency,
+        );
+        let total: f64 = breakdown
+            .iter()
+            .map(|(_, _, _, contribution)| contribution)
+            .sum();
+        println!(
+            "{}",
+            tr!(
+                "task-urgency-header",
+                sid = i64::from(task.sid),
+                title = task.title.as_str()
+            )
+        );
+        let w_label = tr!("task-urgency-weight-label");
+        let f_label = tr!("task-urgency-factor-label");
+        let c_label = tr!("task-urgency-contribution-label");
+        for (component, weight, factor, contribution) in breakdown {
+            println!(
+                "  {component:<12} {w_label}={weight:>6.2} {f_label}={factor:>6.2} {c_label}={contribution:>7.2}"
+            );
+        }
+        println!("  {:<12} {:>30.2}", tr!("task-urgency-total-label"), total);
+    } else {
+        eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+    }
+    Ok(())
+}
+
+fn run_context_cmd(
+    conn: &Connection,
+    cmd: &ContextCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        ContextCommand::Set { name } => {
+            brega_storage::repo::context_repo::set_active(conn, Some(name))?;
+            println!("{}", tr!("context-activated", name = name));
+        }
+        ContextCommand::Clear => {
+            brega_storage::repo::context_repo::set_active(conn, None)?;
+            println!("{}", tr!("context-cleared"));
+        }
+        ContextCommand::Define { name, filter } => {
+            brega_storage::repo::context_repo::define(conn, name, filter)?;
+            println!("{}", tr!("context-defined", name = name));
+        }
+        ContextCommand::List => {
+            let active = brega_storage::repo::context_repo::get_active(conn)?;
+            let contexts = brega_storage::repo::context_repo::list(conn)?;
+            if contexts.is_empty() {
+                println!("{}", tr!("context-none-defined"));
+            } else {
+                for (name, filter) in contexts {
+                    let marker = if active.as_deref() == Some(name.as_str()) {
+                        '*'
+                    } else {
+                        ' '
+                    };
+                    println!("{marker} {name:<16} {filter}");
+                }
+            }
+        }
+        ContextCommand::Rm { name } => {
+            brega_storage::repo::context_repo::delete(conn, name)?;
+            println!("{}", tr!("context-removed", name = name));
+        }
+    }
+    Ok(())
+}
+
+fn run_hooks_cmd(cmd: &HooksCommand) {
+    match cmd {
+        HooksCommand::List => {
+            let installed = hooks::list_hooks();
+            if installed.is_empty() {
+                println!("{}", tr!("hooks-none-installed"));
+            } else {
+                for (event, path) in installed {
+                    println!("{:<16} {}", event.script_name(), path.display());
+                }
+            }
+        }
+        HooksCommand::Path => println!("{}", hooks::hooks_dir().display()),
+    }
+}
+
+fn run_habit_cmd(conn: &Connection, cmd: &HabitCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        HabitCommand::Add {
+            title,
+            identity,
+            cue,
+            response,
+            reward,
+            direction,
+            cadence,
+            minimum,
+            stack_after,
+            stack_delay,
+        } => run_habit_add(
+            conn,
+            title,
+            identity.as_deref(),
+            cue.as_deref(),
+            response.as_deref(),
+            reward.as_deref(),
+            direction,
+            cadence,
+            minimum,
+            *stack_after,
+            *stack_delay,
+        ),
+        HabitCommand::List { all } => run_habit_list(conn, *all),
+        HabitCommand::Show { sid } => run_habit_show(conn, *sid),
+        HabitCommand::Log {
+            sid,
+            amount,
+            notes,
+            slip,
+        } => run_habit_log(conn, *sid, amount, notes.as_deref(), *slip),
+        HabitCommand::Skip { sid, date, reason } => {
+            run_habit_skip(conn, *sid, date.as_deref(), reason.as_deref())
+        }
+        HabitCommand::Freeze { sid, date } => run_habit_freeze(conn, *sid, date.as_deref()),
+        HabitCommand::Backfill { sid, date, amount } => {
+            run_habit_backfill(conn, *sid, date, amount)
+        }
+        HabitCommand::Streaks { sid } => run_habit_streaks(conn, *sid),
+        HabitCommand::Modify {
+            sid,
+            title,
+            identity,
+            cue,
+            response,
+            reward,
+            stack_after,
+        } => run_habit_modify(
+            conn,
+            *sid,
+            title.as_deref(),
+            identity.as_deref(),
+            cue.as_deref(),
+            response.as_deref(),
+            reward.as_deref(),
+            *stack_after,
+        ),
+        HabitCommand::Archive { sid } => run_habit_archive(conn, *sid),
+        HabitCommand::Status => run_habit_status(conn),
+        HabitCommand::Slip { sid, notes } => {
+            let entry = brega_storage::repo::habit_repo::log_entry(
+                conn,
+                *sid,
+                "true",
+                notes.as_deref(),
+                true,
+            )?;
+            let habit = brega_storage::repo::habit_repo::get_by_sid(conn, *sid)?
+                .ok_or("habit not found")?;
+            println!(
+                "🚫 {}",
+                tr!(
+                    "habit-slip-logged",
+                    sid = i64::from(habit.sid),
+                    title = habit.title.as_str(),
+                    streak = i64::from(habit.streak_current),
+                    label = habit.streak_label()
+                )
+            );
+            let _ = entry;
+            Ok(())
+        }
+        HabitCommand::Remind {
+            sid,
+            at,
+            days,
+            clear,
+            list,
+        } => run_habit_remind(conn, *sid, at.as_deref(), days.as_deref(), *clear, *list),
+    }
+}
+
+fn run_habit_remind(
+    conn: &Connection,
+    sid: u32,
+    at: Option<&str>,
+    days: Option<&str>,
+    clear: bool,
+    list: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if clear {
+        brega_storage::repo::habit_repo::set_reminders(conn, sid, &[])?;
+        println!("{}", tr!("habit-reminders-cleared", sid = i64::from(sid)));
+        return Ok(());
+    }
+    if list {
+        let reminders = brega_storage::repo::habit_repo::get_reminders(conn, sid)?;
+        if reminders.is_empty() {
+            println!("{}", tr!("habit-no-reminders", sid = i64::from(sid)));
+        } else {
+            for r in &reminders {
+                println!("  🔔 {}", r.display());
+            }
+        }
+        return Ok(());
+    }
+    if let Some(time) = at {
+        let mut reminders = brega_storage::repo::habit_repo::get_reminders(conn, sid)?;
+        let day_list = days
+            .map(|d| d.split(',').map(|s| s.trim().to_lowercase()).collect())
+            .unwrap_or_default();
+        reminders.push(brega_core::domain::habit::Reminder {
+            time: time.to_string(),
+            days: day_list,
+        });
+        brega_storage::repo::habit_repo::set_reminders(conn, sid, &reminders)?;
+        println!(
+            "{}",
+            tr!("habit-reminder-added", time = time, sid = i64::from(sid))
+        );
+    } else {
+        eprintln!("{}", tr!("habit-remind-usage"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_habit_add(
+    conn: &Connection,
+    title: &str,
+    identity: Option<&str>,
+    cue: Option<&str>,
+    response: Option<&str>,
+    reward: Option<&str>,
+    direction: &str,
+    cadence: &str,
+    minimum: &str,
+    stack_after: Option<u32>,
+    stack_delay: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let new_habit = brega_core::domain::habit::NewHabit {
+        title: title.to_owned(),
+        identity: identity.map(str::to_owned),
+        cue: cue.map(str::to_owned),
+        craving: None,
+        response: response.map(str::to_owned),
+        reward: reward.map(str::to_owned),
+        direction: parse_habit_direction_arg(direction)?,
+        cadence: cadence.to_owned(),
+        minimum: minimum.to_owned(),
+        stack_after,
+        stack_delay_s: stack_delay,
+        area_id: None,
+        project_id: None,
+    };
+    let habit = brega_storage::repo::habit_repo::insert(conn, &new_habit)?;
+    println!(
+        "{}",
+        tr!(
+            "habit-created",
+            sid = i64::from(habit.sid),
+            title = habit.title.as_str()
+        )
+    );
+    Ok(())
+}
+
+fn run_habit_list(conn: &Connection, all: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let habits = brega_storage::repo::habit_repo::list(conn, all)?;
+    println!(
+        "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  {}",
+        tr!("habit-col-sid"),
+        tr!("habit-col-dir"),
+        tr!("habit-col-level"),
+        tr!("habit-col-streak"),
+        tr!("habit-col-title"),
+        tr!("habit-col-identity")
+    );
+    for habit in &habits {
+        println!(
+            "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  {}",
+            habit.sid,
+            habit.direction.as_str(),
+            tr!(
+                "habit-level-display",
+                level = i64::from(habit.level),
+                name = habit.level_name()
+            ),
+            tr!(
+                "habit-streak-display",
+                days = i64::from(habit.streak_current)
+            ),
+            truncate_str(&habit.title, 28),
+            truncate_str(habit.identity.as_deref().unwrap_or("—"), 40)
+        );
+    }
+    println!(
+        "\n{}",
+        tr!("habit-count", count = usize_to_i64(habits.len()))
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_habit_show(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(habit) = brega_storage::repo::habit_repo::get_by_sid(conn, sid)? else {
+        eprintln!("{}", tr!("habit-not-found", sid = i64::from(sid)));
+        return Ok(());
+    };
+    let all_habits = brega_storage::repo::habit_repo::list(conn, true)?;
+    let sid_by_id: std::collections::HashMap<_, _> = all_habits
+        .iter()
+        .map(|candidate| (candidate.id, candidate.sid))
+        .collect();
+    let entries = brega_storage::repo::habit_repo::get_entries(conn, habit.sid)?;
+    let stacked = brega_storage::repo::habit_repo::get_stacked_habits(conn, habit.id)?;
+    let parent = habit.stack_after.and_then(|parent_id| {
+        all_habits
+            .iter()
+            .find(|candidate| candidate.id == parent_id)
+            .map(|candidate| format!("#{} — {}", candidate.sid, candidate.title))
+    });
+    let archived = match habit.archived_at {
+        Some(timestamp) => format_timestamp_full(timestamp)?,
+        None => String::from("—"),
+    };
+
+    println!("#{} — {}", habit.sid, habit.title);
+    println!(
+        "{}",
+        tr!("habit-show-direction", value = habit.direction.as_str())
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-identity",
+            value = habit.identity.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-cue",
+            value = habit.cue.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-craving",
+            value = habit.craving.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-response",
+            value = habit.response.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-reward",
+            value = habit.reward.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-cadence",
+            value = habit_cadence_display(&habit.cadence)
+        )
+    );
+    println!(
+        "{}",
+        tr!("habit-show-minimum", value = habit.minimum.as_str())
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-level",
+            level = i64::from(habit.level),
+            name = habit.level_name()
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-xp",
+            value = format_habit_xp(habit.level, habit.xp)
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-streaks",
+            current = i64::from(habit.streak_current),
+            best = i64::from(habit.streak_best)
+        )
+    );
+    let stacking_value = parent.map_or_else(
+        || tr!("habit-stacking-none"),
+        |label| {
+            if habit.stack_delay_s == 0 {
+                label
+            } else {
+                format!("{label} + {}", format_stack_delay(habit.stack_delay_s))
+            }
+        },
+    );
+    println!("{}", tr!("habit-show-stacking", value = stacking_value));
+    println!(
+        "{}",
+        tr!(
+            "habit-show-area",
+            value = habit
+                .area_id
+                .map_or_else(|| String::from("—"), |id| id.to_string())
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-project",
+            value = habit
+                .project_id
+                .map_or_else(|| String::from("—"), |id| id.to_string())
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-created",
+            value = format_timestamp_full(habit.created_at)?
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-modified",
+            value = format_timestamp_full(habit.modified_at)?
+        )
+    );
+    println!("{}", tr!("habit-show-archived", value = archived.as_str()));
+    println!(
+        "{}",
+        tr!(
+            "habit-show-entries",
+            count = usize_to_i64(entries.len()),
+            next = next_due_text(&habit, &entries, &sid_by_id)
+        )
+    );
+    if stacked.is_empty() {
+        println!("{}", tr!("habit-show-stacked-none"));
+    } else {
+        println!("{}", tr!("habit-show-stacked-header"));
+        for child in &stacked {
+            if child.stack_delay_s == 0 {
+                println!("  #{} — {}", child.sid, child.title);
+            } else {
+                println!(
+                    "  #{} — {} (+{})",
+                    child.sid,
+                    child.title,
+                    format_stack_delay(child.stack_delay_s)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_habit_log(
+    conn: &Connection,
+    sid: u32,
+    amount: &str,
+    notes: Option<&str>,
+    slip: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let entry = brega_storage::repo::habit_repo::log_entry(conn, sid, amount, notes, slip)?;
+    let habit = brega_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after logging")))?;
+    let outcome = if entry.slip {
+        tr!("habit-logged-slip")
+    } else {
+        tr!("habit-logged-habit")
+    };
+    println!(
+        "{}",
+        tr!(
+            "habit-log-result",
+            outcome = outcome,
+            sid = i64::from(habit.sid),
+            streak = i64::from(habit.streak_current),
+            xp = format_habit_xp(habit.level, habit.xp)
+        )
+    );
+    Ok(())
+}
+
+fn run_habit_skip(
+    conn: &Connection,
+    sid: u32,
+    date: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let skip_date = date.map_or_else(today_string, str::to_owned);
+    brega_storage::repo::habit_repo::add_skip(conn, sid, &skip_date, "skip", reason)?;
+    let habit = brega_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after skip")))?;
+    println!(
+        "{}",
+        tr!(
+            "habit-skipped",
+            sid = i64::from(habit.sid),
+            date = skip_date.as_str(),
+            streak = i64::from(habit.streak_current)
+        )
+    );
+    Ok(())
+}
+
+fn run_habit_freeze(
+    conn: &Connection,
+    sid: u32,
+    date: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let freeze_date = date.map_or_else(today_string, str::to_owned);
+    brega_storage::repo::habit_repo::add_skip(conn, sid, &freeze_date, "freeze", None)?;
+    let habit = brega_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after freeze")))?;
+    println!(
+        "{}",
+        tr!(
+            "habit-frozen",
+            sid = i64::from(habit.sid),
+            date = freeze_date.as_str(),
+            streak = i64::from(habit.streak_current)
+        )
+    );
+    Ok(())
+}
+
+fn run_habit_backfill(
+    conn: &Connection,
+    sid: u32,
+    date: &str,
+    amount: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = brega_storage::repo::habit_repo::log_backfill(conn, sid, date, amount, None)?;
+    let habit = brega_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after backfill")))?;
+    println!(
+        "{}",
+        tr!(
+            "habit-backfilled",
+            sid = i64::from(habit.sid),
+            date = date,
+            streak = i64::from(habit.streak_current),
+            xp = format_habit_xp(habit.level, habit.xp)
+        )
+    );
+    Ok(())
+}
+
+fn run_habit_streaks(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(habit) = brega_storage::repo::habit_repo::get_by_sid(conn, sid)? else {
+        eprintln!("{}", tr!("habit-not-found", sid = i64::from(sid)));
+        return Ok(());
+    };
+    let entries = brega_storage::repo::habit_repo::get_entries(conn, sid)?;
+
+    println!("#{} — {}", habit.sid, habit.title);
+    println!(
+        "{}",
+        tr!(
+            "habit-streak-current",
+            days = i64::from(habit.streak_current)
+        )
+    );
+    println!(
+        "{}",
+        tr!("habit-streak-best", days = i64::from(habit.streak_best))
+    );
+    if entries.is_empty() {
+        println!("{}", tr!("habit-entries-none"));
+        return Ok(());
+    }
+
+    println!("{}", tr!("habit-entries-header"));
+    for entry in entries.iter().take(10) {
+        let date = entry.occurred_at.date();
+        let slip_suffix = if entry.slip {
+            format!(" ({})", tr!("habit-slip-label"))
+        } else {
+            String::new()
+        };
+        println!(
+            "  {:04}-{:02}-{:02}{slip_suffix}",
+            date.year(),
+            u8::from(date.month()),
+            date.day(),
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_habit_modify(
+    conn: &Connection,
+    sid: u32,
+    title: Option<&str>,
+    identity: Option<&str>,
+    cue: Option<&str>,
+    response: Option<&str>,
+    reward: Option<&str>,
+    stack_after: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let patch = brega_core::domain::habit::HabitPatch {
+        title: title.map(str::to_owned),
+        identity: match identity {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        cue: match cue {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        craving: None,
+        response: match response {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        reward: match reward {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        stack_after: stack_after.map(|value| if value == 0 { None } else { Some(value) }),
+        stack_delay_s: None,
+    };
+    let habit = brega_storage::repo::habit_repo::update(conn, sid, &patch)?;
+    println!(
+        "{}",
+        tr!(
+            "habit-modified",
+            sid = i64::from(habit.sid),
+            title = habit.title.as_str()
+        )
+    );
+    Ok(())
+}
+
+fn run_habit_archive(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    brega_storage::repo::habit_repo::archive(conn, sid)?;
+    println!("{}", tr!("habit-archived", sid = i64::from(sid)));
+    Ok(())
+}
+
+fn run_habit_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let habits = brega_storage::repo::habit_repo::list(conn, false)?;
+    if habits.is_empty() {
+        println!("{}", tr!("habit-none-active"));
+        return Ok(());
+    }
+    for habit in &habits {
+        println!("{}", format_habit_status_line(habit));
+    }
+    println!(
+        "\n{}",
+        tr!("habit-count", count = usize_to_i64(habits.len()))
+    );
+    Ok(())
+}
+
+fn run_focus_cmd(
+    conn: &Connection,
+    cmd: &commands::focus::FocusCommand,
+    cfg: &config::Config,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        FocusCommand::Start {
+            task,
+            cycles,
+            work,
+            short_break,
+            long_break,
+        } => run_focus_start(
+            conn,
+            *task,
+            *cycles,
+            *work,
+            *short_break,
+            *long_break,
+            &cfg.focus,
+        ),
+        FocusCommand::Done => run_focus_done(conn, &cfg.time, prior_activity),
+        FocusCommand::SkipBreak => run_focus_skip_break(conn),
+        FocusCommand::Pause => run_focus_pause(conn),
+        FocusCommand::Resume => run_focus_resume(conn),
+        FocusCommand::Stop => run_focus_stop(conn),
+        FocusCommand::Status => run_focus_status(conn),
+        FocusCommand::Stats { period } => run_focus_stats(conn, period),
+        FocusCommand::History { task } => run_focus_history(conn, *task),
+    }
+}
+
+fn run_focus_start(
+    conn: &Connection,
+    task: Option<u32>,
+    cycles: Option<u32>,
+    work: Option<u32>,
+    short_break: Option<u32>,
+    long_break: Option<u32>,
+    focus_cfg: &config::Focus,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(active) = brega_storage::repo::focus_repo::get_active(conn)? {
+        eprintln!(
+            "{}",
+            tr!(
+                "focus-already-active",
+                sid = i64::from(active.sid),
+                state = active.state.as_str()
+            )
+        );
+        return Ok(());
+    }
+
+    let task_id = if let Some(sid) = task {
+        brega_storage::repo::task_repo::get_by_sid(conn, sid)?.map(|task| task.id)
+    } else {
+        None
+    };
+    let base_config = focus_cfg.to_core();
+    let new = brega_core::domain::focus::NewFocusSession {
+        task_id,
+        project_id: None,
+        planned_cycles: cycles.unwrap_or(focus_cfg.cycles),
+        config: brega_core::domain::focus::FocusConfig {
+            work_minutes: work.unwrap_or(base_config.work_minutes),
+            short_break_minutes: short_break.unwrap_or(base_config.short_break_minutes),
+            long_break_minutes: long_break.unwrap_or(base_config.long_break_minutes),
+            cycles_before_long_break: base_config.cycles_before_long_break,
+        },
+    };
+    let session = brega_storage::repo::focus_repo::insert(conn, &new)?;
+    notify(
+        &tr!("focus-notify-started-title"),
+        &tr!(
+            "focus-notify-started-body",
+            minutes = i64::from(session.config.work_minutes)
+        ),
+    );
+    println!(
+        "🍅 {}",
+        tr!(
+            "focus-started",
+            sid = i64::from(session.sid),
+            minutes = i64::from(session.config.work_minutes),
+            cycles = i64::from(session.planned_cycles)
+        )
+    );
+    Ok(())
+}
+
+fn run_focus_done(
+    conn: &Connection,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = brega_storage::repo::focus_repo::get_active(conn)? else {
+        println!("{}", tr!("focus-none-active"));
+        return Ok(());
+    };
+
+    let session = brega_storage::repo::focus_repo::complete_cycle(conn, active.sid)?;
+    log_focus_time_block(conn, &active, time_cfg, prior_activity)?;
+    if session.state.is_terminal() {
+        notify(
+            &tr!("focus-notify-complete-title"),
+            &tr!(
+                "focus-notify-complete-body",
+                cycles = i64::from(session.completed_cycles)
+            ),
+        );
+        println!(
+            "🎉 {}",
+            tr!(
+                "focus-complete",
+                sid = i64::from(session.sid),
+                cycles = i64::from(session.completed_cycles)
+            )
+        );
+        return Ok(());
+    }
+
+    let break_mins = if session.state == brega_core::domain::focus::FocusState::LongBreak {
+        session.config.long_break_minutes
+    } else {
+        session.config.short_break_minutes
+    };
+    notify(
+        &tr!("focus-notify-pomodoro-done-title"),
+        &tr!(
+            "focus-notify-pomodoro-done-body",
+            minutes = i64::from(break_mins)
+        ),
+    );
+    println!(
+        "✅ {}",
+        tr!(
+            "focus-cycle-done",
+            completed = i64::from(session.completed_cycles),
+            planned = i64::from(session.planned_cycles),
+            minutes = i64::from(break_mins),
+            state = session.state.as_str()
+        )
+    );
+    Ok(())
+}
+
+fn run_focus_skip_break(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = brega_storage::repo::focus_repo::get_active(conn)? else {
+        println!("{}", tr!("focus-none-active"));
+        return Ok(());
+    };
+
+    let session = brega_storage::repo::focus_repo::start_work(conn, active.sid)?;
+    println!(
+        "⏩ {}",
+        tr!(
+            "focus-skip-break",
+            cycle = i64::from(session.completed_cycles + 1)
+        )
+    );
+    Ok(())
+}
+
+fn run_focus_pause(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = brega_storage::repo::focus_repo::get_active(conn)? else {
+        println!("{}", tr!("focus-none-active"));
+        return Ok(());
+    };
+
+    let session = brega_storage::repo::focus_repo::pause(conn, active.sid)?;
+    println!("⏸ {}", tr!("focus-paused", sid = i64::from(session.sid)));
+    Ok(())
+}
+
+fn run_focus_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = brega_storage::repo::focus_repo::get_active(conn)? else {
+        println!("{}", tr!("focus-none-active"));
+        return Ok(());
+    };
+
+    let session = brega_storage::repo::focus_repo::resume(conn, active.sid)?;
+    println!("▶ {}", tr!("focus-resumed", sid = i64::from(session.sid)));
+    Ok(())
+}
+
+fn run_focus_stop(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = brega_storage::repo::focus_repo::get_active(conn)? else {
+        println!("{}", tr!("focus-none-active"));
+        return Ok(());
+    };
+
+    let session = brega_storage::repo::focus_repo::abort(conn, active.sid)?;
+    println!(
+        "⏹ {}",
+        tr!(
+            "focus-aborted",
+            sid = i64::from(session.sid),
+            cycles = i64::from(session.completed_cycles)
+        )
+    );
+    Ok(())
+}
+
+fn run_focus_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(session) = brega_storage::repo::focus_repo::get_active(conn)? else {
+        println!("{}", tr!("focus-none-active"));
+        return Ok(());
+    };
+
+    let elapsed = time::OffsetDateTime::now_utc() - session.started_at;
+    println!(
+        "🍅 {}",
+        tr!(
+            "focus-status-line",
+            sid = i64::from(session.sid),
+            state = session.state.as_str(),
+            completed = i64::from(session.completed_cycles),
+            planned = i64::from(session.planned_cycles)
+        )
+    );
+    println!(
+        "   {}",
+        tr!("focus-status-elapsed", duration = format_duration(elapsed))
+    );
+    println!(
+        "   {}",
+        tr!(
+            "focus-status-config",
+            work = i64::from(session.config.work_minutes),
+            short = i64::from(session.config.short_break_minutes),
+            long = i64::from(session.config.long_break_minutes)
+        )
+    );
+    Ok(())
+}
+
+fn run_focus_stats(conn: &Connection, period: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let (from, to) = period_range(period);
+    let sessions = brega_storage::repo::focus_repo::list_range(conn, &from, &to)?;
+    let total_cycles: u32 = sessions
+        .iter()
+        .map(|session| session.completed_cycles)
+        .sum();
+    let completed = sessions
+        .iter()
+        .filter(|session| session.state == brega_core::domain::focus::FocusState::Completed)
+        .count();
+    let aborted = sessions
+        .iter()
+        .filter(|session| session.state == brega_core::domain::focus::FocusState::Aborted)
+        .count();
+    let total_work_mins: u32 = sessions
+        .iter()
+        .map(|session| session.completed_cycles * session.config.work_minutes)
+        .sum();
+    println!("{}", tr!("focus-stats-header", period = period));
+    println!(
+        "  {}",
+        tr!(
+            "focus-stats-completed",
+            cycles = i64::from(total_cycles),
+            sessions = usize_to_i64(completed)
+        )
+    );
+    println!(
+        "  {}",
+        tr!("focus-stats-aborted", sessions = usize_to_i64(aborted))
+    );
+    println!(
+        "  {}",
+        tr!(
+            "focus-stats-time",
+            hours = i64::from(total_work_mins / 60),
+            minutes = i64::from(total_work_mins % 60)
+        )
+    );
+    Ok(())
+}
+
+fn run_focus_history(conn: &Connection, task_sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let task =
+        brega_storage::repo::task_repo::get_by_sid(conn, task_sid)?.ok_or("task not found")?;
+    let sessions = brega_storage::repo::focus_repo::list_for_task(conn, task.id)?;
+    let blocks = brega_storage::repo::time_block_repo::list_for_task(conn, task.id)?;
+    println!(
+        "{}",
+        tr!(
+            "focus-history-header",
+            sid = i64::from(task.sid),
+            title = task.title.as_str()
+        )
+    );
+    println!(
+        "\n  {}",
+        tr!(
+            "focus-history-sessions",
+            count = usize_to_i64(sessions.len())
+        )
+    );
+    for s in &sessions {
+        let cycles = format!("{}/{}", s.completed_cycles, s.planned_cycles);
+        println!(
+            "    #{:<4}  {:<10}  {:<7}  {}",
+            s.sid,
+            s.state.as_str(),
+            cycles,
+            format_time(s.started_at),
+        );
+    }
+    println!(
+        "\n  {}",
+        tr!("focus-history-blocks", count = usize_to_i64(blocks.len()))
+    );
+    for b in &blocks {
+        let dur = b
+            .duration()
+            .map_or_else(|| tr!("time-running"), format_duration);
+        println!(
+            "    #{:<4}  {:<10}  {:<8}  {}",
+            b.sid,
+            b.source.as_str(),
+            dur,
+            format_time(b.start_ts),
+        );
+    }
+    Ok(())
+}
+
+fn log_focus_time_block(
+    conn: &Connection,
+    session: &brega_core::domain::focus::FocusSession,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let end_ts = time::OffsetDateTime::now_utc();
+    let start_ts = end_ts - time::Duration::minutes(i64::from(session.config.work_minutes));
+    let title = focus_time_block_title(conn, session)?;
+
+    // Idle detection: trim (or split out) any idle tail of the work interval so
+    // an unattended Pomodoro doesn't over-count focused time.
+    let decision = resolve_idle_decision(time_cfg, start_ts, prior_activity, end_ts)?;
+    let block_end = decision.as_ref().map_or(end_ts, |d| d.outcome.block_end);
+
+    if block_end > start_ts {
+        let block = brega_core::domain::time_block::NewTimeBlock {
+            title,
+            task_id: session.task_id,
+            project_id: session.project_id,
+            notes: None,
+            source: brega_core::domain::time_block::BlockSource::Pomodoro,
+        };
+        let _ = brega_storage::repo::time_block_repo::insert_completed(
+            conn, &block, start_ts, block_end,
+        )?;
+    }
+
+    if let Some(d) = &decision {
+        if let Some(spill) = d.outcome.spillover {
+            let source_title = focus_time_block_title(conn, session)?;
+            record_idle_block(conn, &source_title, session.task_id, spill)?;
+        }
+        print_idle_outcome(d);
+    }
+    Ok(())
+}
+
+fn focus_time_block_title(
+    conn: &Connection,
+    session: &brega_core::domain::focus::FocusSession,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(task_id) = session.task_id
+        && let Some(task) = brega_storage::repo::task_repo::get_by_id(conn, task_id)?
+    {
+        return Ok(task.title);
+    }
+
+    Ok(format!("Focus #{}", session.sid))
+}
+
+fn run_time_cmd(
+    conn: &Connection,
+    cmd: &commands::time::TimeCommand,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        TimeCommand::Start { words } => run_time_start(conn, words),
+        TimeCommand::Stop => run_time_stop(conn, time_cfg, prior_activity),
+        TimeCommand::Resume => run_time_resume(conn),
+        TimeCommand::Current => run_time_current(conn),
+        TimeCommand::Blocks { period, json } => run_time_blocks(conn, period, *json),
+        TimeCommand::Report { period, json } => run_time_report(conn, period, *json),
+        TimeCommand::Edit {
+            sid,
+            title,
+            notes,
+            start,
+            end,
+            task,
+            billable,
+        } => run_time_edit(
+            conn,
+            *sid,
+            title.as_deref(),
+            notes.as_deref(),
+            start.as_deref(),
+            end.as_deref(),
+            *task,
+            *billable,
+        ),
+    }
+}
+
+fn run_time_start(conn: &Connection, words: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let (title, task_id) = resolve_time_start_input(conn, words)?;
+
+    if let Some(running) = brega_storage::repo::time_block_repo::get_current(conn)? {
+        brega_storage::repo::time_block_repo::stop(conn, running.sid)?;
+        println!(
+            "{}",
+            tr!(
+                "time-stopped",
+                sid = i64::from(running.sid),
+                title = running.title.as_str()
+            )
+        );
+    }
+
+    let new_block = brega_core::domain::time_block::NewTimeBlock {
+        title,
+        task_id,
+        project_id: None,
+        notes: None,
+        source: brega_core::domain::time_block::BlockSource::Timer,
+    };
+    let block = brega_storage::repo::time_block_repo::insert(conn, &new_block)?;
+    println!(
+        "{}",
+        tr!(
+            "time-started",
+            sid = i64::from(block.sid),
+            title = block.title.as_str(),
+            time = format_time(block.start_ts)
+        )
+    );
+    Ok(())
+}
+
+fn run_time_stop(
+    conn: &Connection,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(running) = brega_storage::repo::time_block_repo::get_current(conn)? else {
+        println!("{}", tr!("time-no-timer"));
+        return Ok(());
+    };
+
+    let now = time::OffsetDateTime::now_utc();
+    let decision = resolve_idle_decision(time_cfg, running.start_ts, prior_activity, now)?;
+
+    let block = match &decision {
+        Some(d) if d.resolution != brega_core::domain::idle::IdleResolution::Keep => {
+            let block = brega_storage::repo::time_block_repo::stop_at(
+                conn,
+                running.sid,
+                d.outcome.block_end,
+            )?;
+            if let Some(spill) = d.outcome.spillover {
+                record_idle_block(conn, &running.title, running.task_id, spill)?;
+            }
+            block
+        }
+        _ => brega_storage::repo::time_block_repo::stop(conn, running.sid)?,
+    };
+
+    let duration = block.duration().map_or_else(String::new, format_duration);
+    println!(
+        "{}",
+        tr!(
+            "time-stopped-duration",
+            sid = i64::from(block.sid),
+            title = block.title.as_str(),
+            duration = duration.as_str()
+        )
+    );
+    if let Some(d) = &decision {
+        print_idle_outcome(d);
+    }
+    Ok(())
+}
+
+/// The result of evaluating idle time against a running/just-closed block.
+struct IdleDecision {
+    /// The detected idle interval.
+    interval: brega_core::domain::idle::IdleInterval,
+    /// The resolution chosen (from config or an interactive prompt).
+    resolution: brega_core::domain::idle::IdleResolution,
+    /// How the block should be adjusted.
+    outcome: brega_core::domain::idle::IdleOutcome,
+}
+
+/// What to do about a detected idle interval before touching storage.
+enum IdleAction {
+    /// Apply a resolution without prompting.
+    Use(brega_core::domain::idle::IdleResolution),
+    /// Ask the user interactively.
+    Prompt,
+}
+
+/// Decide how to act on a detected idle interval: honor the configured default
+/// when set, otherwise prompt on an interactive terminal or fall back to
+/// keeping the time (never silently discard) when non-interactive.
+const fn idle_action(
+    default: Option<brega_core::domain::idle::IdleResolution>,
+    interactive: bool,
+) -> IdleAction {
+    match default {
+        Some(resolution) => IdleAction::Use(resolution),
+        None if interactive => IdleAction::Prompt,
+        None => IdleAction::Use(brega_core::domain::idle::IdleResolution::Keep),
+    }
+}
+
+/// Detect and resolve idle time for a block spanning `[block_start, now]`.
+///
+/// Returns `None` when idle detection is disabled, there is no heartbeat, or the
+/// idle gap is below the configured threshold.
+fn resolve_idle_decision(
+    time_cfg: &config::Time,
+    block_start: time::OffsetDateTime,
+    prior_activity: Option<time::OffsetDateTime>,
+    now: time::OffsetDateTime,
+) -> Result<Option<IdleDecision>, Box<dyn std::error::Error>> {
+    use brega_core::domain::idle;
+    use std::io::IsTerminal;
+
+    if !time_cfg.idle_detection {
+        return Ok(None);
+    }
+    let Some(last) = prior_activity else {
+        return Ok(None);
+    };
+    // Idle can't begin before the block itself started.
+    let effective_last = last.max(block_start);
+    let Some(interval) = idle::detect(effective_last, now, time_cfg.idle_threshold_duration())
+    else {
+        return Ok(None);
+    };
+
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let resolution = match idle_action(time_cfg.idle_default_resolution(), interactive) {
+        IdleAction::Use(resolution) => resolution,
+        IdleAction::Prompt => prompt_idle_resolution(interval)?,
+    };
+
+    let outcome = idle::resolve(now, interval, resolution);
+    Ok(Some(IdleDecision {
+        interval,
+        resolution,
+        outcome,
+    }))
+}
+
+/// Prompt the user to keep / discard / split a detected idle interval.
+/// An empty line or EOF keeps the time (the safe default).
+fn prompt_idle_resolution(
+    interval: brega_core::domain::idle::IdleInterval,
+) -> Result<brega_core::domain::idle::IdleResolution, Box<dyn std::error::Error>> {
+    use brega_core::domain::idle::IdleResolution;
+    use std::io::Write;
+
+    let duration = format_duration(interval.duration());
+    println!(
+        "{}",
+        tr!("time-idle-detected", duration = duration.as_str())
+    );
+    loop {
+        print!("{}", tr!("time-idle-prompt"));
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            return Ok(IdleResolution::Keep);
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(IdleResolution::Keep);
+        }
+        if let Some(resolution) = IdleResolution::from_str_opt(trimmed) {
+            return Ok(resolution);
+        }
+        println!("{}", tr!("time-idle-invalid"));
+    }
+}
+
+/// Record a detected idle interval as a separate, manually-sourced block so the
+/// time is preserved but not counted as focused work.
+fn record_idle_block(
+    conn: &Connection,
+    source_title: &str,
+    task_id: Option<Uuid>,
+    interval: brega_core::domain::idle::IdleInterval,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if interval.end <= interval.start {
+        return Ok(());
+    }
+    let block = brega_core::domain::time_block::NewTimeBlock {
+        title: tr!("time-idle-block-title", title = source_title),
+        task_id,
+        project_id: None,
+        notes: None,
+        source: brega_core::domain::time_block::BlockSource::Manual,
+    };
+    brega_storage::repo::time_block_repo::insert_completed(
+        conn,
+        &block,
+        interval.start,
+        interval.end,
+    )?;
+    Ok(())
+}
+
+/// Print a one-line summary of how idle time was resolved.
+fn print_idle_outcome(decision: &IdleDecision) {
+    use brega_core::domain::idle::IdleResolution;
+    let duration = format_duration(decision.interval.duration());
+    let message = match decision.resolution {
+        IdleResolution::Keep => tr!("time-idle-kept", duration = duration.as_str()),
+        IdleResolution::Discard => tr!("time-idle-discarded", duration = duration.as_str()),
+        IdleResolution::Split => tr!("time-idle-split", duration = duration.as_str()),
+    };
+    println!("{message}");
+}
+
+fn run_time_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let block = brega_storage::repo::time_block_repo::resume(conn)?;
+    println!(
+        "{}",
+        tr!(
+            "time-resumed",
+            sid = i64::from(block.sid),
+            title = block.title.as_str()
+        )
+    );
+    Ok(())
+}
+
+fn run_time_current(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(block) = brega_storage::repo::time_block_repo::get_current(conn)? {
+        let elapsed = time::OffsetDateTime::now_utc() - block.start_ts;
+        println!(
+            "{}",
+            tr!(
+                "time-current-running",
+                sid = i64::from(block.sid),
+                title = block.title.as_str(),
+                duration = format_duration(elapsed)
+            )
+        );
+    } else {
+        println!("{}", tr!("time-no-timer"));
+    }
+    Ok(())
+}
+
+fn run_time_blocks(
+    conn: &Connection,
+    period: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (from, to) = period_range(period);
+    let blocks = brega_storage::repo::time_block_repo::list_range(conn, &from, &to)?;
+    if json {
+        let payload: Result<Vec<serde_json::Value>, time::error::Format> = blocks
+            .iter()
+            .map(|block| {
+                Ok(serde_json::json!({
+                    "sid": block.sid,
+                    "title": &block.title,
+                    "start": format_timestamp_full(block.start_ts)?,
+                    "duration": block
+                        .duration()
+                        .map_or_else(|| String::from("running"), format_duration),
+                }))
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload?)?);
+    } else {
+        println!(
+            "{:>4}  {:<30}  {:<20}  {:>8}",
+            tr!("time-blocks-col-sid"),
+            tr!("time-blocks-col-title"),
+            tr!("time-blocks-col-started"),
+            tr!("time-blocks-col-duration")
+        );
+        for block in &blocks {
+            let duration = block
+                .duration()
+                .map_or_else(|| tr!("time-running"), format_duration);
+            println!(
+                "{:>4}  {:<30}  {:<20}  {:>8}",
+                block.sid,
+                truncate_str(&block.title, 30),
+                format_time(block.start_ts),
+                duration
+            );
+        }
+        println!(
+            "\n{}",
+            tr!("time-blocks-count", count = usize_to_i64(blocks.len()))
+        );
+    }
+    Ok(())
+}
+
+fn run_time_report(
+    conn: &Connection,
+    period: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (from, to) = period_range(period);
+    let blocks = brega_storage::repo::time_block_repo::list_range(conn, &from, &to)?;
+    let mut by_title = std::collections::BTreeMap::<String, i64>::new();
+    let mut total_secs = 0_i64;
+    for block in &blocks {
+        if let Some(duration) = block.duration() {
+            let seconds = duration.whole_seconds();
+            *by_title.entry(block.title.clone()).or_default() += seconds;
+            total_secs += seconds;
+        }
+    }
+
+    if json {
+        let entries: Vec<_> = by_title
+            .iter()
+            .map(|(title, seconds)| {
+                serde_json::json!({
+                    "title": title,
+                    "duration": format_duration_secs(*seconds),
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "period": period,
+            "total": format_duration_secs(total_secs),
+            "entries": entries,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("{}", tr!("time-report-header", period = period));
+        println!(
+            "{:<40}  {:>10}",
+            tr!("time-report-col-title"),
+            tr!("time-report-col-duration")
+        );
+        println!("{}", "-".repeat(52));
+        for (title, seconds) in &by_title {
+            println!(
+                "{:<40}  {:>10}",
+                truncate_str(title, 40),
+                format_duration_secs(*seconds)
+            );
+        }
+        println!("{}", "-".repeat(52));
+        println!(
+            "{:<40}  {:>10}",
+            tr!("time-report-col-total"),
+            format_duration_secs(total_secs)
+        );
+    }
+    Ok(())
+}
+
+fn resolve_time_start_input(
+    conn: &Connection,
+    words: &[String],
+) -> Result<(String, Option<uuid::Uuid>), Box<dyn std::error::Error>> {
+    let Some(first) = words.first() else {
+        return Ok((String::from("Untitled"), None));
+    };
+
+    if let Ok(sid) = first.parse::<u32>()
+        && let Some(task) = brega_storage::repo::task_repo::get_by_sid(conn, sid)?
+    {
+        return Ok((task.title.clone(), Some(task.id)));
+    }
+
+    let new_task = commands::add::parse_add_input(words);
+    let task = brega_storage::repo::task_repo::insert(
+        conn,
+        &new_task,
+        &brega_core::domain::urgency::UrgencyConfig::default(),
+    )?;
+    println!(
+        "{}",
+        tr!(
+            "task-created",
+            sid = i64::from(task.sid),
+            title = task.title.as_str()
+        )
+    );
+    Ok((task.title.clone(), Some(task.id)))
+}
+
+fn format_time(t: time::OffsetDateTime) -> String {
+    format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second())
+}
+
+fn format_timestamp_full(t: time::OffsetDateTime) -> Result<String, time::error::Format> {
+    t.format(&Rfc3339)
+}
+
+fn format_duration(duration: time::Duration) -> String {
+    format_duration_secs(duration.whole_seconds())
+}
+
+fn format_duration_secs(total_secs: i64) -> String {
+    let sign = if total_secs < 0 { "-" } else { "" };
+    let abs = total_secs.unsigned_abs();
+    let hours = abs / 3_600;
+    let minutes = (abs % 3_600) / 60;
+    let seconds = abs % 60;
+    format!("{sign}{hours}:{minutes:02}:{seconds:02}")
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+
+    let mut truncated = s.chars().take(max - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+fn period_range(period: &str) -> (String, String) {
+    let now = time::OffsetDateTime::now_utc();
+    let today = now.date();
+    match period {
+        "today" => {
+            let tomorrow = today + time::Duration::days(1);
+            (
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    today.year(),
+                    u8::from(today.month()),
+                    today.day()
+                ),
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    tomorrow.year(),
+                    u8::from(tomorrow.month()),
+                    tomorrow.day()
+                ),
+            )
+        }
+        "week" => {
+            let weekday_num = today.weekday().number_days_from_monday();
+            let monday = today - time::Duration::days(i64::from(weekday_num));
+            let next_monday = monday + time::Duration::days(7);
+            (
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    monday.year(),
+                    u8::from(monday.month()),
+                    monday.day()
+                ),
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    next_monday.year(),
+                    u8::from(next_monday.month()),
+                    next_monday.day()
+                ),
+            )
+        }
+        "month" => {
+            let from = format!(
+                "{:04}-{:02}-01T00:00:00Z",
+                today.year(),
+                u8::from(today.month())
+            );
+            let to = if today.month() == time::Month::December {
+                format!("{:04}-01-01T00:00:00Z", today.year() + 1)
+            } else {
+                format!(
+                    "{:04}-{:02}-01T00:00:00Z",
+                    today.year(),
+                    u8::from(today.month()) + 1
+                )
+            };
+            (from, to)
+        }
+        _ => (
+            String::from("2000-01-01T00:00:00Z"),
+            String::from("2100-01-01T00:00:00Z"),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_time_edit(
+    conn: &Connection,
+    sid: u32,
+    title: Option<&str>,
+    notes: Option<&str>,
+    start: Option<&str>,
+    end: Option<&str>,
+    task: Option<u32>,
+    billable: Option<bool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let task_id = match task {
+        Some(tsid) => {
+            let t =
+                brega_storage::repo::task_repo::get_by_sid(conn, tsid)?.ok_or("task not found")?;
+            Some(Some(t.id))
+        }
+        None => None,
+    };
+    let patch = brega_core::domain::time_block::TimeBlockPatch {
+        title: title.map(String::from),
+        notes: notes.map(|n| Some(n.to_string())),
+        start: start.map(String::from),
+        end: end.map(|e| Some(e.to_string())),
+        task_id,
+        billable,
+    };
+    let block = brega_storage::repo::time_block_repo::update(conn, sid, &patch)?;
+    println!(
+        "{}",
+        tr!(
+            "time-block-updated",
+            sid = i64::from(block.sid),
+            title = block.title.as_str()
+        )
+    );
+    Ok(())
+}
+
+fn run_project_cmd(
+    conn: &Connection,
+    cmd: &commands::project::ProjectCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::project::ProjectCommand::Add { name } => {
+            let new_proj = brega_core::domain::project::NewProject {
+                name: name.clone(),
+                notes: None,
+                area_id: None,
+                deadline: None,
+            };
+            let proj = brega_storage::repo::project_repo::insert(conn, &new_proj)?;
+            println!(
+                "{}",
+                tr!(
+                    "project-created",
+                    sid = i64::from(proj.sid),
+                    name = proj.name.as_str()
+                )
+            );
+        }
+        commands::project::ProjectCommand::List { all } => {
+            let projects = brega_storage::repo::project_repo::list(conn, *all)?;
+            for project in &projects {
+                println!(
+                    "#{:<4}  {:<7}  {}",
+                    project.sid,
+                    project.status.as_str(),
+                    project.name
+                );
+            }
+            println!(
+                "\n{}",
+                tr!("project-count", count = usize_to_i64(projects.len()))
+            );
+        }
+        commands::project::ProjectCommand::Archive { sid } => {
+            brega_storage::repo::project_repo::archive(conn, *sid)?;
+            println!("{}", tr!("project-archived", sid = i64::from(*sid)));
+        }
+    }
+    Ok(())
+}
+
+fn run_area_cmd(
+    conn: &Connection,
+    cmd: &commands::project::AreaCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::project::AreaCommand::Add { name } => {
+            let new_area = brega_core::domain::area::NewArea {
+                name: name.clone(),
+                color: None,
+            };
+            let area = brega_storage::repo::area_repo::insert(conn, &new_area)?;
+            println!("{}", tr!("area-created", name = area.name.as_str()));
+        }
+        commands::project::AreaCommand::List { all } => {
+            let areas = brega_storage::repo::area_repo::list(conn, *all)?;
+            for area in &areas {
+                println!("  {}", area.name);
+            }
+            println!("\n{}", tr!("area-count", count = usize_to_i64(areas.len())));
+        }
+    }
+    Ok(())
+}
+
+fn run_tag_cmd(
+    conn: &Connection,
+    cmd: &commands::tag::TagCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::tag::TagCommand::List => {
+            let tags = brega_storage::repo::tag_repo::list_all(conn)?;
+            for tag in &tags {
+                println!("  #{}", tag.name);
+            }
+            println!("\n{}", tr!("tag-count", count = usize_to_i64(tags.len())));
+        }
+        commands::tag::TagCommand::Rename { old, new } => {
+            brega_storage::repo::tag_repo::rename(conn, old, new)?;
+            println!("{}", tr!("tag-renamed", old = old, new = new));
+        }
+    }
+    Ok(())
+}
+
+fn run_checklist_cmd(
+    conn: &Connection,
+    cmd: &ChecklistCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use brega_storage::repo::{checklist_repo, task_repo};
+
+    let sid = match cmd {
+        ChecklistCommand::Add { sid, .. }
+        | ChecklistCommand::List { sid }
+        | ChecklistCommand::Check { sid, .. }
+        | ChecklistCommand::Uncheck { sid, .. }
+        | ChecklistCommand::Rm { sid, .. }
+        | ChecklistCommand::Reorder { sid, .. } => *sid,
+    };
+
+    let Some(task) = task_repo::get_by_sid(conn, sid)? else {
+        eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        return Ok(());
+    };
+
+    match cmd {
+        ChecklistCommand::Add { text, .. } => {
+            let title = text.join(" ");
+            let item = checklist_repo::add(conn, task.id, &title)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-added",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::List { .. } => {
+            print_checklist(conn, task.id, sid)?;
+        }
+        ChecklistCommand::Check { index, .. } => {
+            let item = checklist_repo::set_done(conn, task.id, *index, true)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-checked",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Uncheck { index, .. } => {
+            let item = checklist_repo::set_done(conn, task.id, *index, false)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-unchecked",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Rm { index, .. } => {
+            let title = checklist_repo::remove(conn, task.id, *index)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-removed",
+                    sid = i64::from(sid),
+                    title = title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Reorder { from, to, .. } => {
+            checklist_repo::reorder(conn, task.id, *from, *to)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-reordered",
+                    from = i64::from(*from),
+                    to = i64::from(*to)
+                )
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Print a task's checklist with `[x]`/`[ ]` markers and a progress header.
+fn print_checklist(
+    conn: &Connection,
+    task_id: Uuid,
+    sid: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let items = brega_storage::repo::checklist_repo::list(conn, task_id)?;
+    match brega_core::domain::checklist::progress(&items) {
+        None => {
+            println!("{}", tr!("checklist-empty", sid = i64::from(sid)));
+        }
+        Some((done, total)) => {
+            println!(
+                "{}",
+                tr!(
+                    "checklist-header",
+                    sid = i64::from(sid),
+                    done = usize_to_i64(done),
+                    total = usize_to_i64(total)
+                )
+            );
+            for (position, item) in items.iter().enumerate() {
+                let marker = if item.is_done() { "x" } else { " " };
+                println!("  {}. [{}] {}", position + 1, marker, item.title);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_uda_cmd(
+    conn: &Connection,
+    cmd: &UdaCommand,
+    cfg: &config::Config,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        UdaCommand::Add {
+            key,
+            r#type,
+            label,
+            default,
+        } => {
+            let type_name = r#type.as_str();
+            let uda_type =
+                brega_core::domain::uda::UdaType::from_str_opt(r#type).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("unsupported UDA type: {type_name}"),
+                    )
+                })?;
+            let definition = brega_core::domain::uda::UdaDefinition {
+                key: key.clone(),
+                uda_type,
+                label: label.clone(),
+                default: default.clone(),
+            };
+            brega_storage::repo::uda_repo::add_definition(conn, &definition)?;
+            println!(
+                "{}",
+                tr!(
+                    "uda-created",
+                    key = definition.key.as_str(),
+                    type_name = definition.uda_type.as_str()
+                )
+            );
+        }
+        UdaCommand::List => {
+            let definitions = merged_uda_definitions(conn, cfg)?;
+            for definition in &definitions {
+                println!(
+                    "{:<20}  {:<8}  {:<20}  {}",
+                    definition.key,
+                    definition.uda_type.as_str(),
+                    definition.label.as_deref().unwrap_or("—"),
+                    definition.default.as_deref().unwrap_or("—")
+                );
+            }
+            println!(
+                "\n{}",
+                tr!("uda-count", count = usize_to_i64(definitions.len()))
+            );
+        }
+        UdaCommand::Rm { key } => {
+            brega_storage::repo::uda_repo::remove_definition(conn, key)?;
+            println!("{}", tr!("uda-removed", key = key));
+        }
+    }
+    Ok(())
+}
+
+/// Merge config `[uda.*]` declarations over the per-vault DB definitions.
+/// Config declarations win on key conflict.
+fn merged_uda_definitions(
+    conn: &Connection,
+    cfg: &config::Config,
+) -> Result<Vec<brega_core::domain::uda::UdaDefinition>, Box<dyn std::error::Error>> {
+    use std::collections::BTreeMap;
+    let mut merged: BTreeMap<String, brega_core::domain::uda::UdaDefinition> =
+        brega_storage::repo::uda_repo::list_definitions(conn)?
+            .into_iter()
+            .map(|definition| (definition.key.clone(), definition))
+            .collect();
+    for (key, uda) in &cfg.uda {
+        let uda_type = brega_core::domain::uda::UdaType::from_str_opt(&uda.uda_type)
+            .unwrap_or(brega_core::domain::uda::UdaType::String);
+        merged.insert(
+            key.clone(),
+            brega_core::domain::uda::UdaDefinition {
+                key: key.clone(),
+                uda_type,
+                label: uda.label.clone(),
+                default: uda.default.clone(),
+            },
+        );
+    }
+    Ok(merged.into_values().collect())
+}
+
+/// Handle `brega config show|path|init`.
+fn run_config_cmd(
+    cmd: &commands::config::ConfigCommand,
+    cfg: &config::Config,
+    path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::config::ConfigCommand::Show { json } => {
+            if *json {
+                println!("{}", serde_json::to_string_pretty(cfg)?);
+            } else {
+                print!("{}", config::to_toml(cfg)?);
+            }
+        }
+        commands::config::ConfigCommand::Path => match path {
+            Some(path) => println!("{}", path.display()),
+            None => eprintln!("no config path could be resolved"),
+        },
+        commands::config::ConfigCommand::Init { force } => {
+            let Some(path) = path else {
+                return Err("no config path could be resolved".into());
+            };
+            if path.exists() && !force {
+                println!("config already exists: {}", path.display());
+                println!("re-run with --force to overwrite");
+                return Ok(());
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, config::SAMPLE_CONFIG)?;
+            println!("wrote sample config: {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn run_report_cmd(
+    conn: &Connection,
+    cmd: &commands::report::ReportCommand,
+    active_context: Option<&ActiveContext>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::report::ReportCommand::Define {
+            name,
+            query,
+            sort,
+            columns,
+        } => {
+            let cols = columns
+                .split(',')
+                .map(str::trim)
+                .filter(|column| !column.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let new = brega_core::domain::report::NewReport {
+                name: name.clone(),
+                query: query.clone(),
+                sort: sort.clone(),
+                columns: cols,
+            };
+            let report = brega_storage::repo::report_repo::insert(conn, &new)?;
+            println!(
+                "{}",
+                tr!(
+                    "report-defined",
+                    name = report.name.as_str(),
+                    query = report.query.as_str()
+                )
+            );
+        }
+        commands::report::ReportCommand::List => {
+            let reports = brega_storage::repo::report_repo::list(conn)?;
+            if reports.is_empty() {
+                println!("{}", tr!("report-none-saved"));
+                println!("  {}", tr!("report-example-overdue"));
+                println!("  {}", tr!("report-example-urgent"));
+                println!("  {}", tr!("report-example-work"));
+            } else {
+                for report in &reports {
+                    let sort_info = report.sort.as_deref().unwrap_or("urgency");
+                    println!(
+                        "  {:<20}  {} {:<30}  {} {}",
+                        report.name,
+                        tr!("report-list-query-label"),
+                        report.query,
+                        tr!("report-list-sort-label"),
+                        sort_info
+                    );
+                }
+                println!(
+                    "\n{}",
+                    tr!("report-count", count = usize_to_i64(reports.len()))
+                );
+            }
+        }
+        commands::report::ReportCommand::Show { name, json } => {
+            let Some(report) = brega_storage::repo::report_repo::get_by_name(conn, name)? else {
+                eprintln!("{}", tr!("report-not-found", name = name));
+                return Ok(());
+            };
+            let today = today_string();
+            let query_args = report.query.split_whitespace().collect::<Vec<_>>();
+            let base_filter = brega_parse::filter::parse_filter(&query_args, &today);
+            let filter = combine_with_active_context(base_filter, active_context, &today);
+            let mut filtered = filter_tasks(
+                conn,
+                brega_storage::repo::task_repo::list(conn, false)?,
+                &filter,
+            )?;
+            sort_report_tasks(&mut filtered, report.sort.as_deref());
+            if *json {
+                println!("{}", format_tasks(&filtered, OutputFormat::Json));
+            } else {
+                println!("── {} ──", report.name);
+                let rendered = format_report_tasks(&filtered, &report.columns);
+                print_task_listing(
+                    &rendered,
+                    filtered.len(),
+                    OutputFormat::Table,
+                    active_context.map(|ctx| ctx.name.as_str()),
+                );
+            }
+        }
+        commands::report::ReportCommand::Rm { name } => {
+            brega_storage::repo::report_repo::delete(conn, name)?;
+            println!("{}", tr!("report-removed", name = name));
+        }
+    }
+    Ok(())
+}
+
+fn run_view_cmd(
+    conn: &Connection,
+    name: &str,
+    json: bool,
+    global_format: &str,
+    active_context: Option<&ActiveContext>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let today_str = today_string();
+    let views = commands::views::all_views(&today_str);
+    let Some(view) = views.iter().find(|candidate| candidate.name == name) else {
+        let available = views
+            .iter()
+            .map(|candidate| candidate.name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "{}",
+            tr!("views-unknown", name = name, available = available)
+        );
+        return Ok(());
+    };
+
+    let filter = combine_with_active_context(view.filter.clone(), active_context, &today_str);
+    let filtered = filter_tasks(
+        conn,
+        brega_storage::repo::task_repo::list(conn, false)?,
+        &filter,
+    )?;
+
+    let format = selected_output_format(global_format, json);
+    let rendered = format_tasks(&filtered, format);
+    if matches!(format, OutputFormat::Json) {
+        println!("{rendered}");
+    } else {
+        println!("── {} ({}) ──", view.name, view.description);
+        print_task_listing(
+            &rendered,
+            filtered.len(),
+            format,
+            active_context.map(|ctx| ctx.name.as_str()),
+        );
+    }
+    Ok(())
+}
+
+fn sort_report_tasks(tasks: &mut [Task], sort: Option<&str>) {
+    match sort.map(str::trim).filter(|field| !field.is_empty()) {
+        Some(field) if field.eq_ignore_ascii_case("deadline") => tasks.sort_by(|left, right| {
+            compare_optional_text(left.deadline.as_deref(), right.deadline.as_deref())
+                .then_with(|| left.sid.cmp(&right.sid))
+        }),
+        Some(field) if field.eq_ignore_ascii_case("created") => tasks.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.sid.cmp(&right.sid))
+        }),
+        Some(field) if field.eq_ignore_ascii_case("sid") => {
+            tasks.sort_by_key(|t| t.sid);
+        }
+        _ => tasks.sort_by(|left, right| {
+            right
+                .urgency
+                .partial_cmp(&left.urgency)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.sid.cmp(&right.sid))
+        }),
+    }
+}
+
+fn compare_optional_text(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn format_report_tasks(tasks: &[Task], columns: &[String]) -> String {
+    let normalized_columns = normalized_report_columns(columns);
+    let widths = normalized_columns
+        .iter()
+        .map(|column| {
+            let header_width = report_column_label(column).chars().count();
+            let cell_width = tasks
+                .iter()
+                .map(|task| report_column_value(task, column).chars().count())
+                .max()
+                .unwrap_or(0);
+            std::cmp::max(
+                header_width,
+                std::cmp::min(cell_width, report_column_max_width(column)),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let header = normalized_columns
+        .iter()
+        .zip(&widths)
+        .map(|(column, width)| format_report_cell(report_column_label(column), *width))
+        .collect::<Vec<_>>()
+        .join("  ");
+    let rows = tasks
+        .iter()
+        .map(|task| {
+            normalized_columns
+                .iter()
+                .zip(&widths)
+                .map(|(column, width)| {
+                    format_report_cell(&report_column_value(task, column), *width)
+                })
+                .collect::<Vec<_>>()
+                .join("  ")
+        })
+        .collect::<Vec<_>>();
+
+    let mut lines = Vec::with_capacity(rows.len().saturating_add(1));
+    lines.push(header);
+    lines.extend(rows);
+    lines.join("\n")
+}
+
+fn normalized_report_columns(columns: &[String]) -> Vec<String> {
+    let normalized = columns
+        .iter()
+        .map(|column| column.trim().to_ascii_lowercase())
+        .filter(|column| !column.is_empty())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        vec![
+            String::from("sid"),
+            String::from("priority"),
+            String::from("status"),
+            String::from("title"),
+            String::from("deadline"),
+            String::from("tags"),
+        ]
+    } else {
+        normalized
+    }
+}
+
+fn report_column_label(column: &str) -> &'static str {
+    match column {
+        "sid" => "SID",
+        "priority" => "Priority",
+        "status" => "Status",
+        "title" => "Title",
+        "deadline" => "Deadline",
+        "tags" => "Tags",
+        "urgency" => "Urgency",
+        "created" | "created_at" => "Created",
+        "modified" | "modified_at" => "Modified",
+        "start" | "start_date" => "Start",
+        "evening" => "Evening",
+        _ => "Value",
+    }
+}
+
+fn report_column_max_width(column: &str) -> usize {
+    match column {
+        "sid" => 4,
+        "urgency" | "evening" => 7,
+        "priority" => 8,
+        "status" => 9,
+        "deadline" | "created" | "created_at" | "modified" | "modified_at" | "start"
+        | "start_date" => 12,
+        "tags" => 30,
+        "title" => 40,
+        _ => 20,
+    }
+}
+
+fn report_column_value(task: &Task, column: &str) -> String {
+    match column {
+        "sid" => task.sid.to_string(),
+        "priority" => task
+            .priority
+            .map_or_else(String::new, |priority| priority.as_char().to_string()),
+        "status" => task.status.as_str().to_owned(),
+        "title" => task.title.clone(),
+        "deadline" => task.deadline.clone().unwrap_or_default(),
+        "tags" => task
+            .tags
+            .iter()
+            .map(|tag| format!("#{tag}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        "urgency" => format!("{:.2}", task.urgency),
+        "created" | "created_at" => today_string_for(task.created_at),
+        "modified" | "modified_at" => today_string_for(task.modified_at),
+        "start" | "start_date" => task.start_date.clone().unwrap_or_default(),
+        "evening" => {
+            if task.evening {
+                String::from("yes")
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn format_report_cell(value: &str, width: usize) -> String {
+    format!("{:<width$}", truncate_str(value, width))
+}
+
+fn parse_habit_direction_arg(
+    direction: &str,
+) -> Result<brega_core::domain::habit::HabitDirection, std::io::Error> {
+    brega_core::domain::habit::HabitDirection::from_str_opt(direction).ok_or_else(|| {
+        std::io::Error::other(format!(
+            "invalid habit direction '{direction}' (expected 'build' or 'break')"
+        ))
+    })
+}
+
+fn format_habit_status_line(habit: &brega_core::domain::habit::Habit) -> String {
+    format!(
+        "{} {}  L{} ({})  {} {}d  best {}d  {}",
+        habit.direction_emoji(),
+        habit.title,
+        habit.level,
+        habit.level_name(),
+        habit.streak_label(),
+        habit.streak_current,
+        habit.streak_best,
+        habit_cadence_display(&habit.cadence)
+    )
+}
+
+#[allow(dead_code)]
+const fn habit_icon(_direction: brega_core::domain::habit::HabitDirection) -> &'static str {
+    // Kept for backward compat; prefer habit.direction_emoji() instead.
+    "📖"
+}
+
+fn format_habit_xp(level: u32, xp: u32) -> String {
+    let (_, next) = habit_level_window(level, xp);
+    format!("{xp}/{next} XP")
+}
+
+fn habit_level_window(level: u32, xp: u32) -> (u32, u32) {
+    const LEVEL_THRESHOLDS: [u32; 7] = [0, 5, 13, 34, 89, 233, 610];
+    let current_index = usize::try_from(level.saturating_sub(1))
+        .unwrap_or(LEVEL_THRESHOLDS.len() - 1)
+        .min(LEVEL_THRESHOLDS.len() - 1);
+    let start = LEVEL_THRESHOLDS[current_index];
+    let end = LEVEL_THRESHOLDS
+        .get(current_index + 1)
+        .copied()
+        .unwrap_or_else(|| xp.max(start));
+    (start, end)
+}
+
+fn format_stack_delay(delay_s: u32) -> String {
+    if delay_s >= 3_600 && delay_s.is_multiple_of(3_600) {
+        format!("{}h", delay_s / 3_600)
+    } else if delay_s >= 60 && delay_s.is_multiple_of(60) {
+        format!("{}m", delay_s / 60)
+    } else {
+        format!("{delay_s}s")
+    }
+}
+
+fn next_due_text(
+    habit: &brega_core::domain::habit::Habit,
+    entries: &[brega_core::domain::habit::HabitEntry],
+    sid_by_id: &std::collections::HashMap<uuid::Uuid, u32>,
+) -> String {
+    if let Some(parent_id) = habit.stack_after {
+        let parent = sid_by_id.get(&parent_id).map_or_else(
+            || String::from("stacked habit"),
+            |sid| format!("after #{sid}"),
+        );
+        return if habit.stack_delay_s == 0 {
+            parent
+        } else {
+            format!("{parent} + {}", format_stack_delay(habit.stack_delay_s))
+        };
+    }
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let done_today = entries
+        .iter()
+        .any(|entry| entry.occurred_at.date() == today);
+    match ParsedCadence::from_json(&habit.cadence) {
+        Some(ParsedCadence::Daily) => {
+            if done_today {
+                String::from("tomorrow")
+            } else {
+                String::from("today")
+            }
+        }
+        Some(ParsedCadence::WeeklyTarget { times_per_week }) => {
+            let week_start =
+                today - time::Duration::days(i64::from(today.weekday().number_days_from_monday()));
+            let week_end = week_start + time::Duration::days(7);
+            let count = entries
+                .iter()
+                .filter(|entry| {
+                    let date = entry.occurred_at.date();
+                    !entry.slip && date >= week_start && date < week_end
+                })
+                .count();
+            if count >= usize::from(times_per_week) {
+                String::from("next week")
+            } else {
+                String::from("this week")
+            }
+        }
+        Some(ParsedCadence::SpecificDays { days }) => {
+            if !done_today && days.contains(&today.weekday()) {
+                return String::from("today");
+            }
+            for offset in 1_i64..=7 {
+                let date = today + time::Duration::days(offset);
+                if days.contains(&date.weekday()) {
+                    return format_due_date(date, today);
+                }
+            }
+            String::from("scheduled")
+        }
+        Some(ParsedCadence::EveryNDays { n }) => {
+            let Some(last) = entries
+                .iter()
+                .find(|entry| !entry.slip)
+                .map(|entry| entry.occurred_at.date())
+            else {
+                return String::from("today");
+            };
+            let due = last + time::Duration::days(i64::from(n));
+            if due <= today {
+                String::from("today")
+            } else {
+                format_due_date(due, today)
+            }
+        }
+        None => {
+            if done_today {
+                String::from("logged today")
+            } else {
+                String::from("by cadence")
+            }
+        }
+    }
+}
+
+fn format_due_date(date: time::Date, today: time::Date) -> String {
+    if date == today {
+        String::from("today")
+    } else if date == today + time::Duration::days(1) {
+        String::from("tomorrow")
+    } else {
+        format!(
+            "{:04}-{:02}-{:02}",
+            date.year(),
+            u8::from(date.month()),
+            date.day()
+        )
+    }
+}
+
+fn habit_cadence_display(raw: &str) -> String {
+    ParsedCadence::from_json(raw).map_or_else(|| raw.to_owned(), |cadence| cadence.display())
+}
+
+const fn selected_output_format(global_format: &str, json: bool) -> OutputFormat {
+    if json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::from_str(global_format)
+    }
+}
+
+fn print_task_listing(
+    rendered: &str,
+    count: usize,
+    format: OutputFormat,
+    active_context: Option<&str>,
+) {
+    if !matches!(format, OutputFormat::Json)
+        && let Some(active_context) = active_context
+    {
+        println!("{}", tr!("context-active-banner", name = active_context));
+    }
+    if !rendered.is_empty() {
+        println!("{rendered}");
+    }
+    if !matches!(format, OutputFormat::Json) {
+        println!("\n{}", tr!("task-count", count = usize_to_i64(count)));
+    }
+}
+
+fn load_active_context(
+    conn: &Connection,
+) -> Result<Option<ActiveContext>, Box<dyn std::error::Error>> {
+    let Some(name) = brega_storage::repo::context_repo::get_active(conn)? else {
+        return Ok(None);
+    };
+    let Some(filter) = brega_storage::repo::context_repo::get_filter(conn, &name)? else {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("active context '{name}' is missing"),
+        )));
+    };
+    Ok(Some(ActiveContext { name, filter }))
+}
+
+fn combine_with_active_context(
+    base: brega_parse::filter::Filter,
+    active_context: Option<&ActiveContext>,
+    today: &str,
+) -> brega_parse::filter::Filter {
+    let Some(active_context) = active_context else {
+        return base;
+    };
+    let context_args = active_context.filter.split_whitespace().collect::<Vec<_>>();
+    let context_filter = brega_parse::filter::parse_filter(&context_args, today);
+    brega_parse::filter::Filter::And(vec![context_filter, base])
+}
+
+fn filter_tasks(
+    conn: &Connection,
+    tasks: Vec<Task>,
+    filter: &brega_parse::filter::Filter,
+) -> Result<Vec<Task>, Box<dyn std::error::Error>> {
+    let states = build_task_filter_states(conn, &tasks)?;
+    Ok(tasks
+        .into_iter()
+        .filter(|task| {
+            let state = states.get(&task.id).copied().unwrap_or_default();
+            brega_parse::filter::matches(filter, &TaskFilterable { task, state })
+        })
+        .collect())
+}
+
+fn build_task_filter_states(
+    conn: &Connection,
+    tasks: &[Task],
+) -> Result<HashMap<Uuid, TaskFilterState>, Box<dyn std::error::Error>> {
+    let mut states = HashMap::with_capacity(tasks.len());
+    for task in tasks {
+        let dependents = brega_storage::repo::task_repo::get_dependents(conn, task.id)?;
+        states.insert(
+            task.id,
+            TaskFilterState {
+                is_blocked: brega_storage::repo::task_repo::is_blocked(conn, task.id)?,
+                is_blocking: !dependents.is_empty(),
+            },
+        );
+    }
+    Ok(states)
+}
+
+fn print_task_show(
+    conn: &Connection,
+    task: &Task,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dependencies = related_task_summaries(conn, &task.depends_on)?;
+    let dependents = related_task_summaries(
+        conn,
+        &brega_storage::repo::task_repo::get_dependents(conn, task.id)?,
+    )?;
+    let annotations = brega_storage::repo::annotation_repo::list_for_entity(
+        conn,
+        task.id,
+        brega_core::domain::annotation::ENTITY_KIND_TASK,
+    )?;
+
+    if matches!(format, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "task": {
+                    "sid": task.sid,
+                    "title": &task.title,
+                    "status": task.status.as_str(),
+                    "priority": task.priority.map(|priority| priority.as_char().to_string()),
+                    "deadline": task.deadline.as_deref(),
+                    "start_date": task.start_date.as_deref(),
+                    "scheduled_for": task.scheduled_for.as_deref(),
+                    "recurrence": task.recurrence.as_deref(),
+                    "parent_id": task.parent_id.map(|id| id.to_string()),
+                    "depends_on": task.depends_on.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+                    "tags": &task.tags,
+                    "udas": &task.udas.0,
+                    "notes": task.notes.as_deref(),
+                    "created_at": task.created_at.to_string(),
+                    "modified_at": task.modified_at.to_string(),
+                    "done_at": task.done_at.map(|value| value.to_string()),
+                    "cancelled_at": task.cancelled_at.map(|value| value.to_string()),
+                },
+                "dependencies": dependencies,
+                "dependents": dependents,
+                "annotations": annotations.iter().map(|a| serde_json::json!({
+                    "body": a.body,
+                    "created_at": a.created_at.to_string(),
+                })).collect::<Vec<_>>(),
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("{}", format_task_detail(task, format));
+    if let Some(recurrence) = task.recurrence.as_deref() {
+        println!(
+            "  {}",
+            tr!("task-show-recurs", value = describe_recurrence(recurrence))
+        );
+    }
+    if !dependencies.is_empty() {
+        println!(
+            "  {}",
+            tr!(
+                "task-show-depends",
+                value = format_related_task_summaries(&dependencies)
+            )
+        );
+    }
+    if !dependents.is_empty() {
+        println!(
+            "  {}",
+            tr!(
+                "task-show-blocking",
+                value = format_related_task_summaries(&dependents)
+            )
+        );
+    }
+    if !annotations.is_empty() {
+        println!("  {}", tr!("task-show-annotations"));
+        for (idx, annotation) in annotations.iter().enumerate() {
+            let created = annotation.created_at;
+            let date = format!(
+                "{:04}-{:02}-{:02}",
+                created.year(),
+                u8::from(created.month()),
+                created.day()
+            );
+            println!("    [{}] {} — {}", idx + 1, date, annotation.body);
+        }
+    }
+    Ok(())
+}
+
+fn related_task_summaries(
+    conn: &Connection,
+    ids: &[Uuid],
+) -> Result<Vec<RelatedTaskSummary>, Box<dyn std::error::Error>> {
+    let mut summaries = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(task) = brega_storage::repo::task_repo::get_by_id(conn, *id)? {
+            summaries.push(RelatedTaskSummary {
+                sid: task.sid,
+                title: task.title,
+                status: task.status.as_str().to_string(),
+            });
+        }
+    }
+    Ok(summaries)
+}
+
+fn format_related_task_summaries(tasks: &[RelatedTaskSummary]) -> String {
+    tasks
+        .iter()
+        .map(|task| format!("#{} [{}] {}", task.sid, task.status, task.title))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn describe_recurrence(recurrence_json: &str) -> String {
+    use brega_core::domain::recurrence::{RecurrenceMode, RecurrencePattern, RecurrenceSpec};
+
+    let Some(spec) = RecurrenceSpec::from_json(recurrence_json) else {
+        return recurrence_json.to_string();
+    };
+    let pattern = match spec.pattern {
+        RecurrencePattern::Daily => "daily".to_string(),
+        RecurrencePattern::Weekly => "weekly".to_string(),
+        RecurrencePattern::Monthly => "monthly".to_string(),
+        RecurrencePattern::Yearly => "yearly".to_string(),
+        RecurrencePattern::EveryNDays(days) => format!("every {days} days"),
+        RecurrencePattern::EveryNWeeks(weeks) => format!("every {weeks} weeks"),
+    };
+    let mode = match spec.mode {
+        RecurrenceMode::Periodic => "periodic",
+        RecurrenceMode::Chained => "chained",
+    };
+    format!("{pattern} ({mode})")
+}
+
+fn new_task_to_hook_json(task: &NewTask) -> String {
+    serde_json::json!({
+        "title": &task.title,
+        "notes": &task.notes,
+        "status": task.status.map(|status| status.as_str()),
+        "project_id": task.project_id.map(|id| id.to_string()),
+        "area_id": task.area_id.map(|id| id.to_string()),
+        "heading_id": task.heading_id.map(|id| id.to_string()),
+        "parent_id": task.parent_id.map(|id| id.to_string()),
+        "start_date": &task.start_date,
+        "deadline": &task.deadline,
+        "scheduled_for": &task.scheduled_for,
+        "recurrence": &task.recurrence,
+        "priority": task.priority.map(|priority| priority.as_char().to_string()),
+        "evening": task.evening,
+        "udas": &task.udas.0,
+        "tags": &task.tags,
+    })
+    .to_string()
+}
+
+fn new_task_from_hook_json(original: &NewTask, hook_json: &str) -> Result<NewTask, std::io::Error> {
+    let value: serde_json::Value = serde_json::from_str(hook_json)
+        .map_err(|error| hook_json_error(format!("invalid on-add hook JSON: {error}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| hook_json_error("on-add hook JSON must be an object"))?;
+
+    let mut task = original.clone();
+    if let Some(title) = object.get("title") {
+        task.title = title
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| hook_json_error("hook field 'title' must be a string"))?;
+    }
+    apply_optional_string_field(object, "notes", &mut task.notes)?;
+    if let Some(status) = object.get("status") {
+        task.status = match status {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(
+                TaskStatus::from_str_opt(raw)
+                    .ok_or_else(|| hook_json_error(format!("invalid task status '{raw}'")))?,
+            ),
+            _ => {
+                return Err(hook_json_error(
+                    "hook field 'status' must be a string or null",
+                ));
+            }
+        };
+    }
+    apply_optional_uuid_field(object, "project_id", &mut task.project_id)?;
+    apply_optional_uuid_field(object, "area_id", &mut task.area_id)?;
+    apply_optional_uuid_field(object, "heading_id", &mut task.heading_id)?;
+    apply_optional_uuid_field(object, "parent_id", &mut task.parent_id)?;
+    apply_optional_string_field(object, "start_date", &mut task.start_date)?;
+    apply_optional_string_field(object, "deadline", &mut task.deadline)?;
+    apply_optional_string_field(object, "scheduled_for", &mut task.scheduled_for)?;
+    apply_optional_string_field(object, "recurrence", &mut task.recurrence)?;
+    if let Some(priority) = object.get("priority") {
+        task.priority = match priority {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(
+                brega_core::domain::task::Priority::from_str_opt(raw)
+                    .ok_or_else(|| hook_json_error(format!("invalid task priority '{raw}'")))?,
+            ),
+            _ => {
+                return Err(hook_json_error(
+                    "hook field 'priority' must be a string or null",
+                ));
+            }
+        };
+    }
+    if let Some(evening) = object.get("evening") {
+        task.evening = evening
+            .as_bool()
+            .ok_or_else(|| hook_json_error("hook field 'evening' must be a boolean"))?;
+    }
+    if let Some(udas) = object.get("udas") {
+        if udas.is_object() {
+            task.udas = brega_core::domain::uda::UdaValues::from_json(&udas.to_string());
+        } else {
+            return Err(hook_json_error("hook field 'udas' must be an object"));
+        }
+    }
+    if let Some(tags) = object.get("tags") {
+        let values = tags
+            .as_array()
+            .ok_or_else(|| hook_json_error("hook field 'tags' must be an array"))?;
+        task.tags = values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| hook_json_error("hook field 'tags' must contain only strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+
+    Ok(task)
+}
+
+fn task_to_hook_json(task: &Task) -> String {
+    serde_json::json!({
+        "sid": task.sid,
+        "title": &task.title,
+        "status": task.status.as_str(),
+        "priority": task.priority.map(|priority| priority.as_char().to_string()),
+        "deadline": &task.deadline,
+        "tags": &task.tags,
+    })
+    .to_string()
+}
+
+fn explain_task_urgency(
+    task: &Task,
+    is_blocked: bool,
+    urgency: &brega_core::domain::urgency::UrgencyConfig,
+) -> Vec<(String, f64, f64, f64)> {
+    let now = time::OffsetDateTime::now_utc();
+    let today = today_string_for(now);
+    let input = brega_core::domain::urgency::UrgencyInput {
+        priority: task.priority.map(|priority| priority.as_char()),
+        deadline: task.deadline.as_deref(),
+        start_date: task.start_date.as_deref(),
+        tags: &task.tags,
+        has_project: task.project_id.is_some(),
+        is_blocked,
+        created_at_days_ago: task_age_days(task.created_at, now),
+        today: &today,
+    };
+    brega_core::domain::urgency::explain(&input, urgency)
+}
+
+fn apply_optional_string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    target: &mut Option<String>,
+) -> Result<(), std::io::Error> {
+    if let Some(value) = object.get(field) {
+        *target = match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(raw.clone()),
+            _ => {
+                return Err(hook_json_error(format!(
+                    "hook field '{field}' must be a string or null"
+                )));
+            }
+        };
+    }
+    Ok(())
+}
+
+fn apply_optional_uuid_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    target: &mut Option<Uuid>,
+) -> Result<(), std::io::Error> {
+    if let Some(value) = object.get(field) {
+        *target = match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(Uuid::parse_str(raw).map_err(|error| {
+                hook_json_error(format!("invalid UUID in hook field '{field}': {error}"))
+            })?),
+            _ => {
+                return Err(hook_json_error(format!(
+                    "hook field '{field}' must be a UUID string or null"
+                )));
+            }
+        };
+    }
+    Ok(())
+}
+
+fn hook_json_error(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
+}
+
+fn task_age_days(created_at: time::OffsetDateTime, now: time::OffsetDateTime) -> f64 {
+    let days = (now - created_at).whole_days().clamp(0, 365);
+    f64::from(u16::try_from(days).unwrap_or(365))
+}
+
+/// Convert a `usize` to `i64` for Fluent message interpolation.
+#[allow(clippy::cast_possible_wrap)]
+const fn usize_to_i64(n: usize) -> i64 {
+    n as i64
+}
+
+fn today_string() -> String {
+    today_string_for(time::OffsetDateTime::now_utc())
+}
+
+fn today_string_for(now: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day()
+    )
+}
+
+/// Adapter: makes `Task` implement `brega_parse::filter::Filterable`.
+struct TaskFilterable<'a> {
+    task: &'a brega_core::domain::task::Task,
+    state: TaskFilterState,
+}
+
+impl brega_parse::filter::Filterable for TaskFilterable<'_> {
+    fn status(&self) -> &str {
+        self.task.status.as_str()
+    }
+
+    fn tags(&self) -> &[String] {
+        &self.task.tags
+    }
+
+    fn priority(&self) -> Option<char> {
+        self.task
+            .priority
+            .as_ref()
+            .map(brega_core::domain::task::Priority::as_char)
+    }
+
+    fn project_name(&self) -> Option<&str> {
+        // Project name resolution requires a DB lookup; for now return None.
+        // A future PR can enrich tasks with the project name on load.
+        None
+    }
+
+    fn deadline(&self) -> Option<&str> {
+        self.task.deadline.as_deref()
+    }
+
+    fn start_date(&self) -> Option<&str> {
+        self.task.start_date.as_deref()
+    }
+
+    fn scheduled_for(&self) -> Option<&str> {
+        self.task.scheduled_for.as_deref()
+    }
+
+    fn is_evening(&self) -> bool {
+        self.task.evening
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.task.deleted_at.is_some()
+    }
+
+    fn is_blocked(&self) -> bool {
+        self.state.is_blocked
+    }
+
+    fn is_blocking(&self) -> bool {
+        self.state.is_blocking
+    }
+
+    fn uda_value(&self, key: &str) -> Option<String> {
+        self.task.udas.get_str(key)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod cli_tests {
+    use super::{
+        Cli, IdleAction, PasswordStrength, idle_action, password_strength, undoable_label,
+        validate_first_run_password,
+    };
+    use crate::commands::Commands;
+    use brega_core::domain::idle::IdleResolution;
+    use clap::CommandFactory as _;
+
+    /// (AC #1) An empty first-run password is rejected; any non-empty one is
+    /// accepted with an advisory strength.
+    #[test]
+    fn first_run_password_rejects_empty_accepts_nonempty() {
+        assert!(validate_first_run_password("").is_err());
+        assert!(validate_first_run_password("x").is_ok());
+        assert_eq!(
+            validate_first_run_password("correct horse battery staple"),
+            Ok(PasswordStrength::Strong)
+        );
+    }
+
+    /// (AC #1) Basic strength feedback: short → weak, long/varied → stronger.
+    #[test]
+    fn password_strength_buckets() {
+        assert_eq!(password_strength("abc"), PasswordStrength::Weak);
+        assert_eq!(password_strength("password"), PasswordStrength::Weak);
+        assert_eq!(password_strength("abcdefgh1"), PasswordStrength::Fair);
+        assert_eq!(password_strength("abcdefghijkl"), PasswordStrength::Fair);
+        assert_eq!(
+            password_strength("correcthorsebatterystaple"),
+            PasswordStrength::Strong
+        );
+        assert_eq!(
+            password_strength("Str0ng!Passphrase"),
+            PasswordStrength::Strong
+        );
+    }
+
+    /// A configured default resolution is used verbatim, regardless of TTY.
+    #[test]
+    fn idle_action_uses_configured_default() {
+        assert!(matches!(
+            idle_action(Some(IdleResolution::Discard), false),
+            IdleAction::Use(IdleResolution::Discard)
+        ));
+        assert!(matches!(
+            idle_action(Some(IdleResolution::Split), true),
+            IdleAction::Use(IdleResolution::Split)
+        ));
+    }
+
+    /// With no default, an interactive terminal prompts and a non-interactive
+    /// one falls back to keeping the time (never silently discards).
+    #[test]
+    fn idle_action_prompts_or_keeps_without_default() {
+        assert!(matches!(idle_action(None, true), IdleAction::Prompt));
+        assert!(matches!(
+            idle_action(None, false),
+            IdleAction::Use(IdleResolution::Keep)
+        ));
+    }
+
+    /// Validate the full clap command tree, including the new `sync`,
+    /// `onboard`, and `device` subcommands and their arguments.
+    #[test]
+    fn command_tree_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    /// The sync command group must expose the documented subcommands.
+    #[test]
+    fn sync_subcommands_parse() {
+        let cmd = Cli::command();
+        let sync = cmd
+            .get_subcommands()
+            .find(|c| c.get_name() == "sync")
+            .expect("sync subcommand present");
+        let names: Vec<&str> = sync
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect();
+        assert!(names.contains(&"conflicts"), "sync conflicts present");
+        assert!(names.contains(&"resolve"), "sync resolve present");
+    }
+
+    /// `undo` and `redo` must be registered as top-level subcommands.
+    #[test]
+    fn undo_redo_subcommands_present() {
+        let cmd = Cli::command();
+        let names: Vec<&str> = cmd.get_subcommands().map(clap::Command::get_name).collect();
+        assert!(names.contains(&"undo"), "undo subcommand present");
+        assert!(names.contains(&"redo"), "redo subcommand present");
+    }
+
+    /// Mutating commands are undoable (with a descriptive label); read-only
+    /// and pre-vault commands are not.
+    #[test]
+    fn undoable_label_classifies_commands() {
+        assert_eq!(
+            undoable_label(&Commands::Done { sids: vec![42] }).as_deref(),
+            Some("done #42")
+        );
+        assert_eq!(
+            undoable_label(&Commands::Modify {
+                sid: 7,
+                args: vec![],
+            })
+            .as_deref(),
+            Some("modify #7")
+        );
+        assert_eq!(
+            undoable_label(&Commands::Add {
+                recur: None,
+                words: vec!["x".to_owned()],
+            })
+            .as_deref(),
+            Some("add")
+        );
+        // Read-only and undo/redo themselves are not undoable.
+        assert!(
+            undoable_label(&Commands::List {
+                filter: vec![],
+                json: false,
+            })
+            .is_none()
+        );
+        assert!(undoable_label(&Commands::Undo).is_none());
+        assert!(undoable_label(&Commands::Redo).is_none());
+    }
+}

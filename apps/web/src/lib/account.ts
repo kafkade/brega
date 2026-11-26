@@ -1,11 +1,11 @@
-// Account HTTP client for the tock web app. HTTP lives here (per ADR-001); the
-// SRP/2SKD math lives in `tock-wasm`. Mirrors the CLI/UniFFI behaviour exactly.
+// Account HTTP client for the brega web app. HTTP lives here (per ADR-001); the
+// SRP/2SKD math lives in `brega-wasm`. Mirrors the CLI/UniFFI behaviour exactly.
 
 import init, {
   signup_account,
   parse_setup_code,
   LoginSession,
-} from "tock-wasm";
+} from "brega-wasm";
 
 let wasmReady: Promise<unknown> | null = null;
 
@@ -98,6 +98,6 @@ export async function login(
 export function authHeaders(s: Session): Record<string, string> {
   return {
     Authorization: `Bearer ${s.bearer_token}`,
-    "X-Tock-Channel-Binding": s.channel_binding,
+    "X-Brega-Channel-Binding": s.channel_binding,
   };
 }

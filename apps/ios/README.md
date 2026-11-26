@@ -8,7 +8,7 @@ Thin SwiftUI shell over the Rust core via UniFFI (see
 [`docs/architecture.md`](../../docs/architecture.md) §8.1):
 
 - **`CoreClient` protocol** — dependency boundary between views and the
-  Rust core. `TockCoreClient` (backed by `TockSwift.TockWorkspace`) is the
+  Rust core. `BregaCoreClient` (backed by `BregaSwift.BregaWorkspace`) is the
   production client; `MockCoreClient` is used only for previews/tests, and
   `LockedCoreClient` is the sentinel used while the vault is locked
 - **`VaultGateway`** — opens the shared App Group vault for extension
@@ -17,7 +17,7 @@ Thin SwiftUI shell over the Rust core via UniFFI (see
 - **`AppState`** — `@Observable` app-wide state (vault status, navigation,
   quick-add). Each Stage Manager window gets its own instance.
 - **Presentation DTOs** — `TaskItem`, `ProjectItem`, `HabitItem`, etc.
-  Mapped from the generated `Tock*` UniFFI types in `Core/CoreMapping.swift`
+  Mapped from the generated `Brega*` UniFFI types in `Core/CoreMapping.swift`
 
 ## Navigation
 
@@ -69,20 +69,20 @@ Additional: `SettingsView`, `TaskDetailView`, `QuickAddSheet`,
 
 The app requires an Xcode project or workspace wrapping this SPM
 package. The `Package.swift` depends on `../../bindings/swift` (the
-`TockSwift` library).
+`BregaSwift` library).
 
 ```bash
 # From the repo root — open in Xcode:
 open apps/ios/Package.swift
 ```
 
-The app opens a real encrypted vault through `TockSwift.TockWorkspace`
+The app opens a real encrypted vault through `BregaSwift.BregaWorkspace`
 (UniFFI). The vault file lives in the App Group container
-(`group.com.kafkade.tock`) so the app, widgets, App Intents, and Share
+(`group.com.kafkade.brega`) so the app, widgets, App Intents, and Share
 Extension all read and write the same vault — and the CLI can open the same
 file. `MockCoreClient` is used only for SwiftUI previews and tests.
 
-Generating the FFI binary (`TockFFI.xcframework`) requires macOS with the
+Generating the FFI binary (`BregaFFI.xcframework`) requires macOS with the
 Apple Rust targets; run `cargo xtask xcframework` once before building.
 
 ## Status
@@ -100,4 +100,4 @@ Apple Rust targets; run `cargo xtask xcframework` once before building.
 - [x] WidgetKit widgets — Today, Habit, Status across 7 size families (#52)
 - [x] App Intents for Siri and Shortcuts — 11 intents, 4 entity types, 6 pre-built shortcuts (#53)
 - [x] Share extension for quick capture from any app (#54)
-- [x] Connected to the real Rust core via `TockSwift.TockWorkspace` (#121)
+- [x] Connected to the real Rust core via `BregaSwift.BregaWorkspace` (#121)

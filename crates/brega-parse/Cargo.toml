@@ -1,0 +1,19 @@
+[package]
+name = "brega-parse"
+description = "Query language parser and natural-language date parser for brega."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+time = { workspace = true }
+
+[dev-dependencies]

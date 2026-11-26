@@ -5,13 +5,13 @@
 
 ## Context
 
-Tock must synchronize across multiple devices (CLI, iOS, iPad, Mac, watchOS) with unreliable connectivity. Traditional timestamp-based sync creates race conditions (last-write-wins loses concurrent edits). Operational-transform (OT) and CRDTs solve concurrency but add complexity or require mergeable data types.
+Brega must synchronize across multiple devices (CLI, iOS, iPad, Mac, watchOS) with unreliable connectivity. Traditional timestamp-based sync creates race conditions (last-write-wins loses concurrent edits). Operational-transform (OT) and CRDTs solve concurrency but add complexity or require mergeable data types.
 
 We need conflict detection that is precise (never silently drops changes), resolution that is predictable, and a protocol simple enough to implement correctly across platforms.
 
 ## Decision
 
-Tock uses **event-sourced sync with vector clocks**:
+Brega uses **event-sourced sync with vector clocks**:
 
 **Event structure:**
 - UUIDv7 (time-ordered, globally unique)
@@ -36,7 +36,7 @@ For each incoming event `e` on entity `E`, compare `e.vector_clock` against the 
 - Open time blocks overlapping across devices: mark both with `+SYNC_OVERLAP` tag.
 - Concurrent focus sessions: earlier `started_at` wins; loser marked `Aborted`.
 
-Losing values in LWW conflicts are preserved in the event log and surfaced in `tock sync conflicts` for user review.
+Losing values in LWW conflicts are preserved in the event log and surfaced in `brega sync conflicts` for user review.
 
 **Snapshot compaction:**
 Every 1000 events or 30 days, a snapshot event captures full materialized state for each entity, signed and encrypted. Cold sync downloads the latest snapshot, then deltas. This bounds cold-start bandwidth.

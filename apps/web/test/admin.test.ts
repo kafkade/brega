@@ -2,11 +2,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock the wasm module so tests run without a wasm runtime. Only the pieces the
 // admin client touches (signup_account) are needed here.
-vi.mock("tock-wasm", () => ({
+vi.mock("brega-wasm", () => ({
   default: () => Promise.resolve({}),
   signup_account: () => ({
     register_request_json: JSON.stringify({ username: "admin@example.com" }),
-    emergency_kit_text: "tock Emergency Kit",
+    emergency_kit_text: "brega Emergency Kit",
     setup_code: "TOCK1:xyz",
     secret_key: "A4-XXXX",
   }),
@@ -137,13 +137,13 @@ describe("admin client", () => {
       vi.fn().mockResolvedValue(
         jsonResponse({
           registration_policy: "invite-only",
-          public_address: "https://tock.example.com",
+          public_address: "https://brega.example.com",
         }),
       ),
     );
     const s = await getSettings("", AUTH);
     expect(s.registration_policy).toBe("invite-only");
-    expect(s.public_address).toBe("https://tock.example.com");
+    expect(s.public_address).toBe("https://brega.example.com");
   });
 
   it("updateSettings PATCHes only the provided public address", async () => {

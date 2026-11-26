@@ -1,13 +1,13 @@
 # Migrating servers & downloading your data
 
-Tock is **local-first** and **end-to-end encrypted**. Your device holds the
+Brega is **local-first** and **end-to-end encrypted**. Your device holds the
 authoritative copy of your data; a sync server is an optional, zero-knowledge
 relay that only ever stores ciphertext
 ([ADR-002](adr/ADR-002-end-to-end-encryption.md)). That design has a practical
 consequence worth stating plainly:
 
 > **You can leave at any time, and nothing about leaving is a special favour.**
-> Moving between hosted tock, your own server, and no server at all is a
+> Moving between hosted brega, your own server, and no server at all is a
 > supported, first-class path — not an export button bolted on as an afterthought.
 
 This guide walks the two stories people actually ask about: *"can I move my
@@ -31,10 +31,10 @@ the wrong one is the most common mistake.
 
 | Artifact | Command | Encrypted? | What it's for |
 | --- | --- | --- | --- |
-| **Server ciphertext archive** | `tock account export` | Yes (unchanged E2EE ciphertext) | Portability + the second half of a server migration |
-| **Client vault backup** | `tock backup create` | Yes (outer AES-256-GCM) | Restoring a vault after losing a device |
-| **Plaintext export** | `tock export json` / `tock export md` | **No** | Reading your data in other tools |
-| **Your local vault** | the `.tockvault` file | No (plaintext at rest) | Nothing — don't copy it; use `tock backup create` |
+| **Server ciphertext archive** | `brega account export` | Yes (unchanged E2EE ciphertext) | Portability + the second half of a server migration |
+| **Client vault backup** | `brega backup create` | Yes (outer AES-256-GCM) | Restoring a vault after losing a device |
+| **Plaintext export** | `brega export json` / `brega export md` | **No** | Reading your data in other tools |
+| **Your local vault** | the `.bregavault` file | No (plaintext at rest) | Nothing — don't copy it; use `brega backup create` |
 
 Two of those are ciphertext, and ciphertext is only useful with the key. **Your
 Emergency Kit — your Secret Key, plus your password — is what turns any encrypted
@@ -54,25 +54,25 @@ From the device that currently holds the vault:
 
 ```sh
 # 1. Download the ciphertext archive from your CURRENT server.
-tock account export --out vault.json
+brega account export --out vault.json
 
 # 2. Move the binding to the new server. This disconnects the old one first.
-tock account adopt --server https://new.example.com --email you@example.com --migrate
+brega account adopt --server https://new.example.com --email you@example.com --migrate
 
 # 3. Upload the archive to the NEW server.
-tock account import vault.json
+brega account import vault.json
 
 # 4. Reconcile this device with its new home.
-tock sync
+brega sync
 ```
 
 Then confirm from a *second* device, which is the real proof that the history
 moved:
 
 ```sh
-tock account login --server https://new.example.com --email you@example.com
-tock sync
-tock list       # your pre-migration tasks are all here
+brega account login --server https://new.example.com --email you@example.com
+brega sync
+brega list       # your pre-migration tasks are all here
 ```
 
 ### Why the order is export → adopt → import
@@ -82,7 +82,7 @@ switch servers" reading does not work:
 
 - **`import` must come after `adopt`.** Uploading an archive requires a live,
   channel-bound session *on the destination server*, and the only thing that
-  creates an account there for an existing vault is `adopt`. (`tock account
+  creates an account there for an existing vault is `adopt`. (`brega account
   signup` is not a substitute — it refuses to run when a local vault already
   exists, because it would mint a brand-new **A** and **V**.)
 - **`export` must come before `--migrate`.** A migration is
@@ -100,7 +100,7 @@ switch servers" reading does not work:
   a `Binding moved:` summary warning that the history did not follow and pointing
   at the remaining `import` + `sync` steps.
 
-Step 4's `tock sync` is safe and idempotent: the migration reset your pull
+Step 4's `brega sync` is safe and idempotent: the migration reset your pull
 cursor, so the client re-pulls the events it just imported, recognises every one
 of them as already present locally, and reports zero conflicts.
 
@@ -109,7 +109,7 @@ of them as already present locally, and reports zero conflicts.
 **A vault binds to exactly one server at a time.**
 
 ```sh
-tock account adopt --server https://other.example.com --email you@example.com
+brega account adopt --server https://other.example.com --email you@example.com
 # error: vault is already bound to https://old.example.com;
 #        pass --migrate to move it to https://other.example.com
 ```
@@ -124,7 +124,7 @@ partway leaves your vault local-only rather than half-bound to two servers.
 To leave a server without joining another:
 
 ```sh
-tock account disconnect
+brega account disconnect
 ```
 
 `disconnect` revokes the server principal **B**, resets the sync cursor, and
@@ -137,7 +137,7 @@ local-only state and can be re-adopted later. It never rotates or re-wraps keys.
 ### The ciphertext archive (portability)
 
 ```sh
-tock account export --out vault.json
+brega account export --out vault.json
 ```
 
 This downloads a single JSON archive containing your non-secret vault header
@@ -155,7 +155,7 @@ What this archive is **not**:
 
 - **Not human-readable.** Every payload is AEAD ciphertext.
 - **Not a backup of your device.** It is what the *server* holds. Use
-  `tock backup create` for a restorable client-side snapshot
+  `brega backup create` for a restorable client-side snapshot
   ([ADR-018](adr/ADR-018-backup-restore-format-and-modes.md)).
 - **Not the server's disaster recovery.** A download does nothing if the server
   loses its database before you download. That is what server-retained snapshots
@@ -164,7 +164,7 @@ What this archive is **not**:
 ### The encrypted client backup
 
 ```sh
-tock backup create --out my-vault-$(date +%F).tockbak
+brega backup create --out my-vault-$(date +%F).bregabak
 ```
 
 An outer-encrypted, transactionally consistent snapshot of your local vault,
@@ -172,24 +172,24 @@ sealed under a key derived from your Vault Key. This is the artifact to keep if
 what you want is "I can get my setup back". Restore with an explicit mode:
 
 ```sh
-tock backup restore my-vault-YYYY-MM-DD.tockbak --mode disaster-recovery  # the device is gone
-tock backup restore my-vault-YYYY-MM-DD.tockbak --mode clone              # a second, live device
+brega backup restore my-vault-YYYY-MM-DD.bregabak --mode disaster-recovery  # the device is gone
+brega backup restore my-vault-YYYY-MM-DD.bregabak --mode clone              # a second, live device
 ```
 
-Never copy the raw `.tockvault` file as a "backup": its materialized tables hold
+Never copy the raw `.bregavault` file as a "backup": its materialized tables hold
 **plaintext at rest** ([ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)),
 so a stray copy is a plaintext leak rather than a safe archive.
 
 ### The plaintext escape hatch
 
-If you want your data in another tool, tock will hand it over in the clear:
+If you want your data in another tool, brega will hand it over in the clear:
 
 ```sh
-tock export json --out my-tasks.json
-tock export md --builtin task-list --out my-tasks.md
+brega export json --out my-tasks.json
+brega export md --builtin task-list --out my-tasks.md
 ```
 
-> **Warning — this output is unencrypted.** `tock export` writes plaintext.
+> **Warning — this output is unencrypted.** `brega export` writes plaintext.
 > Anyone who can read the file can read your data; no password, no Secret Key,
 > and no Emergency Kit are needed. Treat the output like a secret: don't drop it
 > in a shared folder, a synced cloud drive, or a bug report. It is a
@@ -213,13 +213,13 @@ not a data-loss event.
   device that still has the vault, re-adopt it and re-upload your history:
 
   ```sh
-  tock account adopt --server https://new.example.com --email you@example.com --migrate
-  tock account import vault.json   # a previously downloaded archive
-  tock sync
+  brega account adopt --server https://new.example.com --email you@example.com --migrate
+  brega account import vault.json   # a previously downloaded archive
+  brega sync
   ```
 
 - **The server is gone for good and you don't want another one** — run
-  `tock account disconnect`. Your vault keeps working, offline and local-only,
+  `brega account disconnect`. Your vault keeps working, offline and local-only,
   indefinitely.
 
 Note the asymmetry that makes this safe: losing a *server* costs you at most the
@@ -234,7 +234,7 @@ unrecoverable. Guard the kit, not the server.
 | Stop using a server entirely | `account disconnect` | Vault stays fully usable, local-only |
 | Hold a copy of what the server has | `account export` | Ciphertext; needs the Emergency Kit |
 | Be able to restore my vault | `backup create` / `backup restore` | Encrypted; explicit restore mode |
-| Read my data in another tool | `tock export json` / `tock export md` | **Plaintext — handle with care** |
+| Read my data in another tool | `brega export json` / `brega export md` | **Plaintext — handle with care** |
 | Survive losing the server's database | Server-retained snapshots (operator) | See [self-hosting](self-hosting.md#backup--restore) |
 
 Keep these distinct. In particular, **export ≠ import ≠ server-retained
@@ -243,7 +243,7 @@ snapshot protects data the moment the server's database dies.
 
 ## Why this matters
 
-Tock's business model is open core: every line of client code is Apache-2.0, the
+Brega's business model is open core: every line of client code is Apache-2.0, the
 sync server is AGPL-3.0 and free to self-host forever, and the paid offering is
 *hosting* — not features, not your data
 ([ADR-007](adr/ADR-007-monetization-open-core.md),
@@ -261,7 +261,7 @@ A model like that only earns trust if leaving is real. So it is:
   functional with no server at all.
 
 The migration path in this document is the concrete answer to "what if you shut
-down?" — and it is tested end to end (`crates/tock-cli/tests/e2e_migration.rs`)
+down?" — and it is tested end to end (`crates/brega-cli/tests/e2e_migration.rs`)
 rather than merely asserted.
 
 ## See also

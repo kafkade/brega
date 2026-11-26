@@ -1,0 +1,30 @@
+[package]
+name = "brega-account"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Zero-I/O account signup/login orchestration (2SKD + SRP-6a) shared by every brega client edge."
+
+[lints]
+workspace = true
+
+[dependencies]
+brega-core = { workspace = true }
+brega-crypto = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+brega-storage = { workspace = true }
+brega-server = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }

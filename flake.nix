@@ -1,5 +1,5 @@
 {
-  description = "tock — unified personal productivity engine (tasks, habits, time, focus)";
+  description = "brega — unified personal productivity engine (tasks, habits, time, focus)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -21,7 +21,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          name = "tock-dev";
+          name = "brega-dev";
           packages = with pkgs; [
             rustToolchain
             cargo-deny
@@ -33,7 +33,7 @@
             openssl
           ];
           shellHook = ''
-            echo "tock dev shell — Rust $(rustc --version)"
+            echo "brega dev shell — Rust $(rustc --version)"
           '';
         };
 

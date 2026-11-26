@@ -1,0 +1,33 @@
+[Unit]
+Description=brega sync server (AGPL-3.0)
+Documentation=https://github.com/kafkade/brega
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=brega
+Group=brega
+ExecStart=/usr/local/bin/brega-server --bind 0.0.0.0:8080 --data-dir /var/lib/brega-server
+Restart=on-failure
+RestartSec=5
+
+# Security hardening.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/brega-server
+PrivateTmp=yes
+
+# Environment.
+Environment=RUST_LOG=info
+# Account / auth configuration (see docs/self-hosting.md):
+Environment=BREGA_MODE=self-hosted
+Environment=BREGA_REGISTRATION_POLICY=disabled
+# Optional: bootstrap an admin invite for this username on a fresh instance
+# (the setup token is written to the journal). Leave unset to use the web
+# first-run wizard instead.
+#Environment=BREGA_ADMIN_USERNAME=admin@example.com
+
+[Install]
+WantedBy=multi-user.target

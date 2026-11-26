@@ -15,7 +15,7 @@ todo.txt add "(A) Deploy backend +work @deploy due:2026-05-23"
 This is precise but hostile to new users and slow for quick capture. Natural language input is fast:
 
 ```bash
-tock add Deploy backend to work due friday priority high
+brega add Deploy backend to work due friday priority high
 ```
 
 However, pure natural-language parsing is ambiguous (does "to work" mean `project:work` or is "to work" part of the title?). We need a system that accepts natural language by default but provides an escape hatch for precision.
@@ -26,9 +26,9 @@ However, pure natural-language parsing is ambiguous (does "to work" mean `projec
 
 1. **Natural language as primary interface:**
    ```bash
-   tock add Deploy backend to work due friday pri high
-   tock add Call dentist tomorrow at 2pm
-   tock add Review PR this evening +urgent
+   brega add Deploy backend to work due friday pri high
+   brega add Call dentist tomorrow at 2pm
+   brega add Review PR this evening +urgent
    ```
    The parser extracts intent using keyword detection, date parsing, and heuristics:
    - `to <name>` → `--project <name>`
@@ -41,23 +41,23 @@ However, pure natural-language parsing is ambiguous (does "to work" mean `projec
 
 2. **Traditional flags as escape hatch:**
    ```bash
-   tock add "Deploy backend to work" --project backend --due friday --priority H
+   brega add "Deploy backend to work" --project backend --due friday --priority H
    ```
    Quotes disambiguate title from parameters. Flags override natural language extraction.
 
 3. **Filter DSL for queries:**
    ```bash
-   tock list "status:pending +work urgency.over:10 limit:10 sort:urgency-"
+   brega list "status:pending +work urgency.over:10 limit:10 sort:urgency-"
    ```
    Filtering uses a structured DSL (field operators: `:`, `.over:`, `.under:`, `.between:`, logical `and`/`or`, tag syntax `+tag` / `-tag`). This is not natural language—it's a query language users learn once.
 
 **Date/time parsing:**
-Natural date parsing via `tock-parse`: `tomorrow`, `friday`, `next monday`, `in 3 days`, `2026-05-23`, `may 23`, `23 may`. Relative dates anchored to "now" at parse time.
+Natural date parsing via `brega-parse`: `tomorrow`, `friday`, `next monday`, `in 3 days`, `2026-05-23`, `may 23`, `23 may`. Relative dates anchored to "now" at parse time.
 
 **Scripting support:**
 Scripts can use flags exclusively, avoiding ambiguity:
 ```bash
-tock add --title "Deploy backend" --project work --due 2026-05-23 --priority H
+brega add --title "Deploy backend" --project work --due 2026-05-23 --priority H
 ```
 
 ## Consequences

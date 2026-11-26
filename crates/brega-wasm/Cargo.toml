@@ -1,0 +1,49 @@
+[package]
+name = "brega-wasm"
+description = "wasm-bindgen account bindings for the brega web app (signup/login/setup-code, zero-I/O)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lib]
+name = "brega_wasm"
+crate-type = ["cdylib", "rlib"]
+
+# Bundled wasm-opt predates the bulk-memory ops LLVM now emits; skip it. Vite
+# minifies the JS glue and the wasm stays small enough for the budget.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+# wasm-bindgen generates `#[no_mangle] pub extern "C"` + unsafe glue, so this
+# crate allows unsafe (workspace default is forbid). Mirrors brega-uniffi.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+
+[dependencies]
+brega-account = { workspace = true }
+wasm-bindgen = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+# The AEAD/SRP crypto stack pulls getrandom 0.4 (via crypto-common); its
+# wasm32-unknown-unknown backend must be opted in explicitly with `wasm_js`.
+# Not referenced in code — declared solely to enable the browser RNG backend.
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+uuid = { workspace = true, features = ["js"] }

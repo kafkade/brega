@@ -1,4 +1,4 @@
-# cargo-dist configuration for tock.
+# cargo-dist configuration for brega.
 #
 # Drives `cargo dist` release artifacts (CLI installers + tarballs/zips).
 # Foundation-phase: config exists and is validated in CI via
@@ -43,7 +43,7 @@ pr-run-mode = "plan"
 # docs/distribution/README.md.
 #
 # Homebrew is published the same way: the `homebrew` job in `release.yml`
-# renders `Formula/tock.rb` from the tagged artifacts and pushes it to the
+# renders `Formula/brega.rb` from the tagged artifacts and pushes it to the
 # `kafkade/homebrew-tap` tap. We deliberately do NOT add cargo-dist's
 # `homebrew` installer / `publish-jobs = ["homebrew"]` here, because
 # cargo-dist does not drive our release (`allow-dirty = ["ci"]` above), so

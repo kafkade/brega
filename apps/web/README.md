@@ -1,8 +1,8 @@
 # apps/web
 
 React + TypeScript + Vite web client. Account onboarding (signup, login, and
-authenticated sync) runs entirely in the browser via the `tock-wasm`
-(wasm-bindgen) binding over `tock-account`. HTTP lives at this edge per ADR-001;
+authenticated sync) runs entirely in the browser via the `brega-wasm`
+(wasm-bindgen) binding over `brega-account`. HTTP lives at this edge per ADR-001;
 the SRP-6a / 2SKD math runs in WASM. See ADR-012.
 
 ## Scope (1.0) — self-host admin + onboarding console
@@ -28,12 +28,12 @@ follow-up (see ADR-012).
 The critical self-host path (first-run admin → save Emergency Kit → SRP login →
 authenticated call, with **no secrets transmitted**) is covered by
 `test/smoke.selfhost.test.ts` (real WASM, runs in the `web` CI job) and, opt-in,
-by `test/e2e.selfhost.test.ts` against a live `tock-server` (`TOCK_E2E=1`).
+by `test/e2e.selfhost.test.ts` against a live `brega-server` (`BREGA_E2E=1`).
 
 ## Develop
 
 ```sh
-# 1. Build the WASM package the app depends on (file:../../crates/tock-wasm/pkg)
+# 1. Build the WASM package the app depends on (file:../../crates/brega-wasm/pkg)
 npm run wasm
 
 # 2. Install deps and run the dev server
@@ -75,8 +75,8 @@ the user redeems with their own client-computed SRP credentials.
 
 In production the console is served as a **separate container** (nginx static
 build, see `../../Dockerfile.web`) behind the reverse proxy, which routes
-`/v1`, `/health`, `/metrics` → `tock-server` and everything else → this SPA.
+`/v1`, `/health`, `/metrics` → `brega-server` and everything else → this SPA.
 Because the SPA talks to the AGPL server only over HTTP, it stays a separate
 Apache-2.0 work (see the self-hosting guide and ADR-006). The API is therefore
 **same-origin** (base `""`); in dev, `vite.config.ts` proxies the same paths to
-`TOCK_SERVER_PROXY` (default `http://localhost:8787`) so behaviour matches.
+`BREGA_SERVER_PROXY` (default `http://localhost:8787`) so behaviour matches.

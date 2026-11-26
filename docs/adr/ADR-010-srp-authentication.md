@@ -17,7 +17,7 @@
 
 ## Context
 
-Tock's hosted sync service must authenticate users without ever receiving their password or enough information to derive encryption keys. Traditional authentication sends passwords (or hashes) to the server, creating these risks:
+Brega's hosted sync service must authenticate users without ever receiving their password or enough information to derive encryption keys. Traditional authentication sends passwords (or hashes) to the server, creating these risks:
 
 1. **Server compromise:** Plaintext passwords or weak hashes (MD5, SHA-1) are immediately exploitable. Even bcrypt/scrypt hashes can be brute-forced offline.
 2. **Insider threat:** Server operators can log passwords during login.
@@ -27,7 +27,7 @@ We need **zero-knowledge authentication:** the server must verify the user knows
 
 ## Decision
 
-Tock uses **SRP-6a (Secure Remote Password, RFC 5054)** over a 4096-bit safe-prime group with SHA-256.
+Brega uses **SRP-6a (Secure Remote Password, RFC 5054)** over a 4096-bit safe-prime group with SHA-256.
 
 **Registration flow:**
 1. Client derives `x = H(salt_srp || H(username || ":" || password))` (salt is random, independent of the KDF salt for MK).

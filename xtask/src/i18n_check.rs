@@ -16,7 +16,7 @@ use fluent_syntax::parser;
 const REFERENCE_LOCALE: &str = "en-US";
 
 /// Relative path (from the workspace root) to the localization assets.
-const ASSETS_DIR: &str = "crates/tock-cli/i18n";
+const ASSETS_DIR: &str = "crates/brega-cli/i18n";
 
 /// Run the i18n catalog check, returning a human-readable error on failure.
 pub fn run() -> Result<(), String> {

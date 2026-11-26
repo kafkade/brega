@@ -1,6 +1,6 @@
-# Self-hosting tock
+# Self-hosting brega
 
-Run your own tock instance and connect the CLI and apps to it. Everything is
+Run your own brega instance and connect the CLI and apps to it. Everything is
 **end-to-end encrypted** — the server only ever stores opaque ciphertext, and
 your password and Secret Key never leave your devices
 ([ADR-002](adr/ADR-002-end-to-end-encryption.md)).
@@ -9,7 +9,7 @@ You copy the compose file, set a `.env`, `docker compose up -d`, create an
 admin account + Emergency Kit in the browser, and point a client at your
 instance. That's the whole loop.
 
-> **Licensing.** `tock-server` is **AGPL-3.0-only**
+> **Licensing.** `brega-server` is **AGPL-3.0-only**
 > ([ADR-006](adr/ADR-006-licensing-dual-license.md)); its source is this
 > repository. The web console (`apps/web`) is Apache-2.0 and talks to the
 > server only over HTTP, so it ships as a **separate container** — it is a
@@ -42,7 +42,7 @@ instance. That's the whole loop.
 - A host with **Docker** and the **Docker Compose** plugin.
 - For HTTPS: a **domain name** whose DNS points at the host, with ports **80**
   and **443** reachable from the internet.
-- tock uses only **SQLite** on a data volume — no Postgres, no Redis.
+- brega uses only **SQLite** on a data volume — no Postgres, no Redis.
 
 ## 1. Quick start (one command)
 
@@ -50,7 +50,7 @@ From a checkout of this repository:
 
 ```sh
 cp .env.example .env
-# edit .env — at minimum review TOCK_HTTP_PORT and TOCK_REGISTRATION_POLICY
+# edit .env — at minimum review BREGA_HTTP_PORT and BREGA_REGISTRATION_POLICY
 docker compose up -d
 ```
 
@@ -58,10 +58,10 @@ This builds and starts two containers:
 
 | Service       | Role                                                               |
 | ------------- | ------------------------------------------------------------------ |
-| `tock-server` | Encrypted blob store + account/auth API (AGPL-3.0). Not published. |
-| `tock-web`    | Web console + first-run wizard; serves the UI and proxies the API. |
+| `brega-server` | Encrypted blob store + account/auth API (AGPL-3.0). Not published. |
+| `brega-web`    | Web console + first-run wizard; serves the UI and proxies the API. |
 
-`tock-web` is your single entrypoint on `http://<host>:${TOCK_HTTP_PORT}`
+`brega-web` is your single entrypoint on `http://<host>:${BREGA_HTTP_PORT}`
 (default `8080`). Confirm the stack is healthy:
 
 ```sh
@@ -73,12 +73,12 @@ curl -f http://localhost:8080/health   # -> {"status":"ok"}
 
 | Variable                   | Purpose                                                     |
 | -------------------------- | ----------------------------------------------------------- |
-| `TOCK_HTTP_PORT`           | Host port for the plain-HTTP entrypoint (default `8080`).   |
-| `TOCK_PUBLIC_URL`          | The URL users connect to (docs/output only).                |
-| `TOCK_MODE`                | `self-hosted` (default) or `hosted`.                        |
-| `TOCK_REGISTRATION_POLICY` | `disabled` (default), `invite-only`, or `open`.             |
-| `TOCK_ADMIN_USERNAME`      | Optional headless admin bootstrap (see below).              |
-| `TOCK_DOMAIN` / `TOCK_ACME_EMAIL` | Domain + email for the optional TLS profile.         |
+| `BREGA_HTTP_PORT`           | Host port for the plain-HTTP entrypoint (default `8080`).   |
+| `BREGA_PUBLIC_URL`          | The URL users connect to (docs/output only).                |
+| `BREGA_MODE`                | `self-hosted` (default) or `hosted`.                        |
+| `BREGA_REGISTRATION_POLICY` | `disabled` (default), `invite-only`, or `open`.             |
+| `BREGA_ADMIN_USERNAME`      | Optional headless admin bootstrap (see below).              |
+| `BREGA_DOMAIN` / `BREGA_ACME_EMAIL` | Domain + email for the optional TLS profile.         |
 
 The default `disabled` policy means **no one can self-register** — the first
 account is bootstrapped as admin, and everyone else joins by invite. You can
@@ -86,7 +86,7 @@ change the policy any time from the admin console.
 
 ## 2. First-run setup + Emergency Kit
 
-Open `http://<host>:${TOCK_HTTP_PORT}` in a browser. Because no account exists
+Open `http://<host>:${BREGA_HTTP_PORT}` in a browser. Because no account exists
 yet, the console shows the **first-run wizard**:
 
 1. Enter an **admin email** and **password**. This first account is
@@ -107,12 +107,12 @@ If you'd rather not use the browser wizard, bootstrap the admin from the host:
 
 ```sh
 # On a fresh instance, mint an admin invite and print a setup token:
-docker compose exec tock-server tock-server admin create-admin --username you@example.com
+docker compose exec brega-server brega-server admin create-admin --username you@example.com
 ```
 
-Or set `TOCK_ADMIN_USERNAME` in `.env` before first start — the server mints
-the invite on boot and logs the setup token (`docker compose logs tock-server`).
-Redeem the token by registering that username from any tock client.
+Or set `BREGA_ADMIN_USERNAME` in `.env` before first start — the server mints
+the invite on boot and logs the setup token (`docker compose logs brega-server`).
+Redeem the token by registering that username from any brega client.
 
 ## 3. Enable HTTPS (TLS)
 
@@ -120,60 +120,60 @@ For anything beyond localhost, terminate TLS. The stack bundles **Caddy** with
 automatic Let's Encrypt certificates. In `.env` set:
 
 ```sh
-TOCK_DOMAIN=tock.example.com
-TOCK_ACME_EMAIL=you@example.com
-TOCK_PUBLIC_URL=https://tock.example.com
+BREGA_DOMAIN=brega.example.com
+BREGA_ACME_EMAIL=you@example.com
+BREGA_PUBLIC_URL=https://brega.example.com
 ```
 
-Point `tock.example.com` at your host, open ports 80 + 443, then:
+Point `brega.example.com` at your host, open ports 80 + 443, then:
 
 ```sh
 docker compose --profile tls up -d
 ```
 
 Caddy fetches and renews the certificate automatically and serves
-`https://tock.example.com`.
+`https://brega.example.com`.
 
 Prefer nginx or Traefik? See [`deploy/proxy/`](../deploy/proxy/README.md) for
-drop-in samples. All three terminate TLS and forward to `tock-web`.
+drop-in samples. All three terminate TLS and forward to `brega-web`.
 
 ## 4. Connect the CLI
 
-Install the `tock` CLI (see the [README](../README.md)), then create or link an
+Install the `brega` CLI (see the [README](../README.md)), then create or link an
 account against **your** instance. Your password is supplied via `--password` or
-the `TOCK_PASSWORD` env var — it is never stored or transmitted:
+the `BREGA_PASSWORD` env var — it is never stored or transmitted:
 
 ```sh
-export TOCK_PASSWORD='your-password'   # or pass --password on each command
+export BREGA_PASSWORD='your-password'   # or pass --password on each command
 
 # Create an account on your instance — prints your Emergency Kit + Secret Key:
-tock account signup --server https://tock.example.com --email you@example.com
+brega account signup --server https://brega.example.com --email you@example.com
 
 # ...on another device, the simplest sign-in is the Setup Code from the wizard,
 # which bundles the server URL, email, and Secret Key in one string:
-tock account login --setup-code "TOCK1:…"
+brega account login --setup-code "TOCK1:…"
 
 # ...or sign in explicitly, supplying the Secret Key from your Emergency Kit
-# (via --secret-key or the TOCK_SECRET_KEY env var):
-tock account login --server https://tock.example.com --email you@example.com \
+# (via --secret-key or the BREGA_SECRET_KEY env var):
+brega account login --server https://brega.example.com --email you@example.com \
   --secret-key "A4-…"
 
-tock account status          # shows who you're signed in as, and where
+brega account status          # shows who you're signed in as, and where
 ```
 
 The server URL is persisted after the first use, so day-to-day you just sync:
 
 ```sh
-tock sync                    # push/pull encrypted events to your instance
+brega sync                    # push/pull encrypted events to your instance
 ```
 
 See [`docs/dogfooding.md`](dogfooding.md) for a full two-device round-trip
 walkthrough (including how conflicts surface).
 
 Already have a local-only vault, or an account on another instance? Use
-`tock account adopt` to bring it here, and see the
+`brega account adopt` to bring it here, and see the
 [migration guide](migration.md) for moving an existing account between servers
-(and for leaving one entirely with `tock account disconnect`).
+(and for leaving one entirely with `brega account disconnect`).
 
 ## 5. Connect the iOS / macOS apps (1.x)
 
@@ -184,14 +184,14 @@ Already have a local-only vault, or an account on another instance? Use
 > 1.0.
 
 When the apps land, they will use the same account model: point an app at your
-instance by entering your server URL (e.g. `https://tock.example.com`) during
-onboarding, or paste the **Setup Code** from the first-run wizard / `tock
+instance by entering your server URL (e.g. `https://brega.example.com`) during
+onboarding, or paste the **Setup Code** from the first-run wizard / `brega
 account` output — it bundles the server URL, email, and Secret Key so the app is
 configured in one step.
 
 ## 6. Managing users
 
-Sign in to the console as the admin (`https://tock.example.com`). The
+Sign in to the console as the admin (`https://brega.example.com`). The
 **Admin console** lets you:
 
 - **Set the registration policy** — `open`, `invite-only`, or `disabled`.
@@ -208,8 +208,8 @@ Sign in to the console as the admin (`https://tock.example.com`). The
 The same operations are available offline from the host:
 
 ```sh
-docker compose exec tock-server tock-server admin list-users
-docker compose exec tock-server tock-server admin reset-registration --policy invite-only
+docker compose exec brega-server brega-server admin list-users
+docker compose exec brega-server brega-server admin reset-registration --policy invite-only
 ```
 
 ## 7. Self-service (your account)
@@ -269,9 +269,9 @@ binary (flags or environment; snapshots are **on by default**, daily):
 
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
-| `--snapshot-interval-secs` | `TOCK_SNAPSHOT_INTERVAL_SECS` | `86400` (daily) | Seconds between snapshots; `0` disables |
-| `--snapshot-dir` | `TOCK_SNAPSHOT_DIR` | `<data_dir>/snapshots` | Where snapshot files are written |
-| `--snapshot-keep` | `TOCK_SNAPSHOT_KEEP` | `7` | Newest *N* snapshots kept; older ones pruned |
+| `--snapshot-interval-secs` | `BREGA_SNAPSHOT_INTERVAL_SECS` | `86400` (daily) | Seconds between snapshots; `0` disables |
+| `--snapshot-dir` | `BREGA_SNAPSHOT_DIR` | `<data_dir>/snapshots` | Where snapshot files are written |
+| `--snapshot-keep` | `BREGA_SNAPSHOT_KEEP` | `7` | Newest *N* snapshots kept; older ones pruned |
 
 Restore is a file copy: stop the server, replace the live DB with a snapshot file,
 restart. Snapshots are ciphertext only — keep your Emergency Kit separately.
@@ -283,18 +283,18 @@ restart. Snapshots are ciphertext only — keep your Emergency Kit separately.
 > are the right depth/cost trade-off for 1.0.
 
 **Manual volume snapshot.** For an out-of-band copy (or before an upgrade), stop
-the server and `tar` the volume. With the default named volume `tock-data`:
+the server and `tar` the volume. With the default named volume `brega-data`:
 
 ```sh
 # Backup: stop for a consistent snapshot, tar the volume, restart.
-docker compose stop tock-server
-docker run --rm -v tock-data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/tock-backup-$(date +%F).tar.gz -C /data .
-docker compose start tock-server
+docker compose stop brega-server
+docker run --rm -v brega-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/brega-backup-$(date +%F).tar.gz -C /data .
+docker compose start brega-server
 
 # Restore into a fresh volume:
-docker run --rm -v tock-data:/data -v "$PWD":/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/tock-backup-YYYY-MM-DD.tar.gz -C /data"
+docker run --rm -v brega-data:/data -v "$PWD":/backup alpine \
+  sh -c "rm -rf /data/* && tar xzf /backup/brega-backup-YYYY-MM-DD.tar.gz -C /data"
 ```
 
 The backup is ciphertext only; keep your Emergency Kit separately — without it
@@ -314,7 +314,7 @@ protect against the server losing its DB.
   never export account B's ciphertext. From the CLI that is one command:
 
   ```sh
-  tock account export --out vault.json
+  brega account export --out vault.json
   ```
 
 - **Offline (operator, whole instance):** produce per-user archives directly from
@@ -322,10 +322,10 @@ protect against the server losing its DB.
 
   ```sh
   # Every vault on the instance:
-  tock-server admin export --all --out ./export
+  brega-server admin export --all --out ./export
 
   # Only one account's vaults:
-  tock-server admin export --account <account-id> --out ./export
+  brega-server admin export --account <account-id> --out ./export
   ```
 
   Each archive is written as `<account>-<vaulthex>.json` (or
@@ -356,7 +356,7 @@ everything server-side, import moves ciphertext only and never decrypts.
 The client wrapper is:
 
 ```sh
-tock account import vault.json
+brega account import vault.json
 ```
 
 > **Server backup ≠ client (vault) backup.** The volume snapshot above protects the
@@ -372,34 +372,34 @@ tock account import vault.json
 #### Client-side vault backup
 
 Use the built-in encrypted backup for a client vault — never copy the raw
-`.tockvault` file (it contains plaintext at rest):
+`.bregavault` file (it contains plaintext at rest):
 
 ```sh
 # Create an outer-encrypted snapshot (AES-256-GCM under a key derived from
 # your Vault Key). Needs your password and Secret Key.
-tock backup create --out my-vault-$(date +%F).tockbak
+brega backup create --out my-vault-$(date +%F).bregabak
 
 # Restore after losing the device (keeps the original device identity and
 # sync state):
-tock backup restore my-vault-YYYY-MM-DD.tockbak --mode disaster-recovery
+brega backup restore my-vault-YYYY-MM-DD.bregabak --mode disaster-recovery
 
 # Restore onto a *second, still-active* device (mints a fresh device identity,
 # resets the sync cursor, and clears the server binding so it reconciles
 # remote history before pushing):
-tock backup restore my-vault-YYYY-MM-DD.tockbak --mode clone
+brega backup restore my-vault-YYYY-MM-DD.bregabak --mode clone
 ```
 
 The archive is decryptable **only** with your password and Secret Key; an archive
 made without the Secret Key cannot be recovered, by design. The `--mode` choice is
-required and explicit — never inferred. `tock export` is portability, **not** a
+required and explicit — never inferred. `brega export` is portability, **not** a
 backup: its output is unencrypted. See the
 [migration guide](migration.md#which-artifact-for-which-job) for a table of which
 artifact solves which problem.
 
 ### Upgrades
 
-Pin a version by setting `TOCK_SERVER_IMAGE` / `TOCK_WEB_IMAGE` in `.env`
-(e.g. `ghcr.io/kafkade/tock-server:v0.5.0`), then:
+Pin a version by setting `BREGA_SERVER_IMAGE` / `BREGA_WEB_IMAGE` in `.env`
+(e.g. `ghcr.io/kafkade/brega-server:v0.5.0`), then:
 
 ```sh
 docker compose pull        # or `docker compose build` if building from source
@@ -411,7 +411,7 @@ The SQLite schema migrates automatically on start. Back up the volume first.
 #### Vault format (v1 → v2)
 
 The server only ever stores ciphertext, so server upgrades never touch the vault
-format — but **clients** do. tock 1.0 draws the line at vault format **v2**
+format — but **clients** do. brega 1.0 draws the line at vault format **v2**
 (two-secret key derivation; [ADR-011](adr/ADR-011-account-based-self-host-two-secret-auth.md)):
 
 - **v2 → v2 (normal):** any `v2` vault written by a 1.x build opens on every
@@ -424,7 +424,7 @@ format — but **clients** do. tock 1.0 draws the line at vault format **v2**
   (created by pre-#126 dogfooding builds) are **not** migrated automatically. If
   a client reports `vault uses the legacy password-only format … re-initialize
   it`, **export** your data from the old build, re-initialize with a current
-  build (`tock account signup` / `tock init`), then **re-import**. Save the new
+  build (`brega account signup` / `brega init`), then **re-import**. Save the new
   Emergency Kit and Secret Key. No official release shipped `v1`, so this affects
   only early dogfooders.
 
@@ -440,8 +440,8 @@ format — but **clients** do. tock 1.0 draws the line at vault format **v2**
   console's usage & health panel.
 
 ```sh
-curl -f https://tock.example.com/health
-curl -s https://tock.example.com/v1/server/info | jq
+curl -f https://brega.example.com/health
+curl -s https://brega.example.com/v1/server/info | jq
 ```
 
 ## How your data stays private

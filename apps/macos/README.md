@@ -1,6 +1,6 @@
 # apps/macos
 
-SwiftUI native macOS app for tock. Three modes per architecture §8.3:
+SwiftUI native macOS app for brega. Three modes per architecture §8.3:
 
 1. **Full window** — `WindowGroup` with `NavigationSplitView` (same 3-column layout as iPadOS).
 2. **MenuBarExtra** — Always-on menu bar item with compact popover: timer/focus status, today tasks, quick-add, focus controls.
@@ -14,11 +14,11 @@ cd apps/macos
 swift build
 
 # Run
-swift run TockMac
+swift run BregaMac
 ```
 
 > **Note:** The app opens a real encrypted vault through
-> `TockSwift.TockWorkspace` (UniFFI). The vault file is created in the
+> `BregaSwift.BregaWorkspace` (UniFFI). The vault file is created in the
 > Application Support / App Group container and is readable by the CLI.
 > `MockCoreClient` is retained only for SwiftUI previews; `LockedCoreClient`
 > is the sentinel used while the vault is locked. Generate the FFI binary with
@@ -26,16 +26,16 @@ swift run TockMac
 
 ## Architecture
 
-- **`App/`** — `@main` entry point (`TockMacApp`) with `WindowGroup`, `MenuBarExtra`, and `Settings` scenes.
-- **`Core/`** — Shared types: `AppSessionState` (cross-scene observable state), `CoreClient` protocol, `TockCoreClient` (real client over `TockSwift.TockWorkspace`), `LockedCoreClient` sentinel, `MockCoreClient` (previews), domain models.
+- **`App/`** — `@main` entry point (`BregaMacApp`) with `WindowGroup`, `MenuBarExtra`, and `Settings` scenes.
+- **`Core/`** — Shared types: `AppSessionState` (cross-scene observable state), `CoreClient` protocol, `BregaCoreClient` (real client over `BregaSwift.BregaWorkspace`), `LockedCoreClient` sentinel, `MockCoreClient` (previews), domain models.
 - **`Navigation/`** — `ContentView` (3-column layout), `SidebarView`, `TaskListView`, `VaultSetupView`.
 - **`Features/`** — View implementations: Today, Inbox, Habits, Timer, Projects, Settings, detail views.
 - **`ViewModels/`** — Presentation logic for feature views.
 - **`MenuBar/`** — `MenuBarView` popover content.
 - **`QuickEntry/`** — `QuickEntryPanelController` (AppKit `NSPanel` + Carbon global hotkey).
-- **`Commands/`** — `TockCommands` defining macOS menu bar keyboard shortcuts.
+- **`Commands/`** — `BregaCommands` defining macOS menu bar keyboard shortcuts.
 - **`Components/`** — Reusable UI components: `TaskRow`, `TagChip`, `PriorityBadge`, etc.
-- **`Theme/`** — Design tokens (`TockTheme`).
+- **`Theme/`** — Design tokens (`BregaTheme`).
 
 ## Code Sharing
 

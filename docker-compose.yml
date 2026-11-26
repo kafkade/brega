@@ -1,33 +1,33 @@
-# docker-compose.yml — one-command self-hosting for tock.
+# docker-compose.yml — one-command self-hosting for brega.
 #
 # Quick start:
 #   cp .env.example .env      # then edit .env
-#   docker compose up -d      # builds + starts tock-server and the web console
+#   docker compose up -d      # builds + starts brega-server and the web console
 #   open http://localhost:8080   # run the first-run setup wizard
 #
 # Add TLS (Let's Encrypt via Caddy) once DNS points at this host:
-#   docker compose --profile tls up -d   # serves https://${TOCK_DOMAIN}
+#   docker compose --profile tls up -d   # serves https://${BREGA_DOMAIN}
 #
-# tock-server is AGPL-3.0 (source: https://github.com/kafkade/tock); the web
+# brega-server is AGPL-3.0 (source: https://github.com/kafkade/brega); the web
 # console is Apache-2.0 and talks to the server only over HTTP. See
 # docs/self-hosting.md and ADR-006.
 
 services:
   # Encrypted blob store + account/auth API. Never sees plaintext user data.
-  tock-server:
-    image: ${TOCK_SERVER_IMAGE:-ghcr.io/kafkade/tock-server:latest}
+  brega-server:
+    image: ${BREGA_SERVER_IMAGE:-ghcr.io/kafkade/brega-server:latest}
     build:
       context: .
       dockerfile: Dockerfile
     environment:
-      - TOCK_BIND=0.0.0.0:8080
-      - TOCK_DATA_DIR=/var/lib/tock-server
-      - TOCK_MODE=${TOCK_MODE:-self-hosted}
-      - TOCK_REGISTRATION_POLICY=${TOCK_REGISTRATION_POLICY:-disabled}
-      - TOCK_ADMIN_USERNAME=${TOCK_ADMIN_USERNAME:-}
+      - BREGA_BIND=0.0.0.0:8080
+      - BREGA_DATA_DIR=/var/lib/brega-server
+      - BREGA_MODE=${BREGA_MODE:-self-hosted}
+      - BREGA_REGISTRATION_POLICY=${BREGA_REGISTRATION_POLICY:-disabled}
+      - BREGA_ADMIN_USERNAME=${BREGA_ADMIN_USERNAME:-}
       - RUST_LOG=${RUST_LOG:-info}
     volumes:
-      - tock-data:/var/lib/tock-server
+      - brega-data:/var/lib/brega-server
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -37,16 +37,16 @@ services:
       start_period: 10s
 
   # Web console + first-run wizard. Serves the SPA and proxies the API to
-  # tock-server, so this is the single plain-HTTP entrypoint.
-  tock-web:
-    image: ${TOCK_WEB_IMAGE:-ghcr.io/kafkade/tock-web:latest}
+  # brega-server, so this is the single plain-HTTP entrypoint.
+  brega-web:
+    image: ${BREGA_WEB_IMAGE:-ghcr.io/kafkade/brega-web:latest}
     build:
       context: .
       dockerfile: Dockerfile.web
     ports:
-      - "${TOCK_HTTP_PORT:-8080}:80"
+      - "${BREGA_HTTP_PORT:-8080}:80"
     depends_on:
-      tock-server:
+      brega-server:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -61,13 +61,13 @@ services:
     image: caddy:2
     profiles: ["tls"]
     depends_on:
-      - tock-web
+      - brega-web
     ports:
       - "80:80"
       - "443:443"
     environment:
-      - TOCK_DOMAIN=${TOCK_DOMAIN:?set TOCK_DOMAIN in .env}
-      - TOCK_ACME_EMAIL=${TOCK_ACME_EMAIL:?set TOCK_ACME_EMAIL in .env}
+      - BREGA_DOMAIN=${BREGA_DOMAIN:?set BREGA_DOMAIN in .env}
+      - BREGA_ACME_EMAIL=${BREGA_ACME_EMAIL:?set BREGA_ACME_EMAIL in .env}
     volumes:
       - ./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -75,7 +75,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  tock-data:
+  brega-data:
     driver: local
   caddy-data:
     driver: local

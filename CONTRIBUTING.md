@@ -1,6 +1,6 @@
-# Contributing to tock
+# Contributing to brega
 
-Thank you for your interest in contributing to tock! This document covers how to
+Thank you for your interest in contributing to brega! This document covers how to
 build the project, our development workflow, and contribution requirements.
 
 ## Code of Conduct
@@ -18,17 +18,17 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ```sh
 # Clone the repository
-git clone https://github.com/kafkade/tock.git
-cd tock
+git clone https://github.com/kafkade/brega.git
+cd brega
 
 # Build all crates
 cargo build --workspace
 
 # Build the CLI
-cargo build -p tock-cli
+cargo build -p brega-cli
 
 # Build WASM (requires wasm-pack)
-wasm-pack build crates/tock-core --target web --features core
+wasm-pack build crates/brega-core --target web --features core
 ```
 
 ## Running Tests
@@ -38,13 +38,13 @@ wasm-pack build crates/tock-core --target web --features core
 cargo test --workspace
 
 # Run tests for a specific crate
-cargo test -p tock-core
+cargo test -p brega-core
 
 # Run a single test by name
-cargo test -p tock-core test_name
+cargo test -p brega-core test_name
 
 # Run tests for a specific module
-cargo test -p tock-core tasks::
+cargo test -p brega-core tasks::
 ```
 
 ## Code Quality
@@ -114,9 +114,9 @@ For multi-component changes, include the component:
 
 ## Architecture Guidelines
 
-### tock-core Must Have Zero I/O
+### brega-core Must Have Zero I/O
 
-The core library (`crates/tock-core/`) must not depend on networking, file system
+The core library (`crates/brega-core/`) must not depend on networking, file system
 access, or platform-specific APIs. All I/O happens in platform-specific code
 (CLI, iOS, web). This keeps the core testable and compilable to WASM.
 
@@ -136,13 +136,13 @@ domains — never introduce domain-specific silos.
 ### Error Handling
 
 - Use `thiserror` for library errors in core crates.
-- Use `anyhow` only in binary crates (`tock-cli`, `tock-server`).
+- Use `anyhow` only in binary crates (`brega-cli`, `brega-server`).
 - Crypto failures must never expose key material in error messages.
 
 ### Localization
 
 User-facing CLI strings are localized with Fluent. Emit them with the `tr!`
-macro and add the message to `crates/tock-cli/i18n/en-US/tock-cli.ftl` (the
+macro and add the message to `crates/brega-cli/i18n/en-US/brega-cli.ftl` (the
 `fl!` macro checks message ids at compile time). Keep `--format json` output and
 `tracing` logs in English. See [`docs/TRANSLATING.md`](docs/TRANSLATING.md) for
 the full guide and how to add a new language. Run `cargo xtask i18n-check` to
@@ -167,7 +167,7 @@ used by projects like the Linux kernel and many CNCF projects.
 ## License
 
 - All code except the sync server is licensed under [Apache-2.0](LICENSE-APACHE).
-- The sync server (`crates/tock-server/`) is licensed under [AGPL-3.0](LICENSE-AGPL).
+- The sync server (`crates/brega-server/`) is licensed under [AGPL-3.0](LICENSE-AGPL).
 
 By contributing, you agree that your contributions will be licensed under the
 same license as the component you are contributing to.

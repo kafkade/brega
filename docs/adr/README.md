@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADRs)
 
-This directory contains Architecture Decision Records for the Tock project. Each ADR documents a key architectural decision, its context, and consequences.
+This directory contains Architecture Decision Records for the Brega project. Each ADR documents a key architectural decision, its context, and consequences.
 
 ## Index
 
@@ -8,7 +8,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 |-----|-------|--------|
 | [ADR-001](ADR-001-rust-zero-io-core.md) | Rust with zero-I/O core crate | Accepted |
 | [ADR-002](ADR-002-end-to-end-encryption.md) | End-to-end encryption with per-item envelope encryption | Accepted (amended by ADR-011) |
-| [ADR-003](ADR-003-event-sourced-sync.md) | Event-sourced sync with vector clocks | Accepted |
+| [ADR-003](ADR-003-event-sourced-sync.md) | Event-sourced sync with vector clocks | Accepted (conflict handling amended by ADR-021) |
 | [ADR-004](ADR-004-sqlite-app-layer-encryption.md) | SQLite with app-layer encryption | Accepted (amended by ADR-014) |
 | [ADR-005](ADR-005-platform-bindings.md) | Platform bindings via UniFFI and WASM | Accepted |
 | [ADR-006](ADR-006-licensing-dual-license.md) | Licensing — Apache-2.0 core, AGPL-3.0 server | Accepted |
@@ -19,11 +19,13 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Accepted (2SKD core landed in #126; format break ratified by ADR-013; amended by ADR-016) |
 | [ADR-012](ADR-012-client-account-onboarding.md) | Client account onboarding — Emergency Kit, Setup Code, shared orchestration | Accepted |
 | [ADR-013](ADR-013-vault-format-versioning-policy.md) | Vault format versioning & 1.0 compatibility policy | Accepted |
-| [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md) | At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred | Accepted (amends ADR-004) |
+| [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md) | At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred | Superseded by ADR-021 (contains a correction) |
 | [ADR-015](ADR-015-pre-1.0-security-audit-status.md) | Pre-1.0 security audit status — documented unaudited stance | Accepted |
 | [ADR-016](ADR-016-three-id-identity-and-adoption.md) | Three-ID identity model & local→server adoption | Accepted (amends ADR-011) |
 | [ADR-018](ADR-018-backup-restore-format-and-modes.md) | Encrypted backup & restore — format and restore modes | Accepted |
 | [ADR-019](ADR-019-server-retained-snapshots-and-pitr.md) | Server data portability & retained snapshots (export, import, PITR deferral) | Accepted |
+| [ADR-020](ADR-020-external-calendar-busy-time.md) | Read-only busy/free time from external calendars | Accepted |
+| [ADR-021](ADR-021-iphone-mac-first-product-direction.md) | iPhone + Mac first product direction (v1 re-baseline) | Accepted (supersedes ADR-014; amends ADR-003 conflict handling) |
 
 ## Categories
 

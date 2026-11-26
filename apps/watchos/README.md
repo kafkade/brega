@@ -1,4 +1,4 @@
-# Tock watchOS Companion App
+# Brega watchOS Companion App
 
 Constrained companion app for Apple Watch showing today's tasks, habits, and
 timer/focus status. Designed for wrist-scale interactions: glance, tap, time.
@@ -52,7 +52,7 @@ To build, open the Xcode project (when created) or use SPM:
 cd apps/watchos && swift package resolve
 ```
 
-The complication bundle (`TockComplicationBundle`) needs to be referenced from
+The complication bundle (`BregaComplicationBundle`) needs to be referenced from
 a WidgetKit extension target configured in the Xcode project.
 
 ## Complication Families

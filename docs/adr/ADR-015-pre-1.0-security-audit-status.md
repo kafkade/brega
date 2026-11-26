@@ -5,17 +5,17 @@
 
 ## Context
 
-This ADR closes issue [#173](https://github.com/kafkade/tock/issues/173).
+This ADR closes issue [#173](https://github.com/kafkade/brega/issues/173).
 
-tock markets end-to-end encryption, a zero-knowledge sync server, SRP-6a
+brega markets end-to-end encryption, a zero-knowledge sync server, SRP-6a
 authentication, and two-secret key derivation (2SKD). For a **first official
 release** of a privacy/crypto product, an independent third-party review of the
 protocol and its implementation is effectively table stakes: it is the standard
 by which users judge whether the marketed guarantees are trustworthy.
 
-**Current assurance basis.** Today, tock's security posture rests on two things:
+**Current assurance basis.** Today, brega's security posture rests on two things:
 
-1. **Audited primitives.** tock uses [RustCrypto](https://github.com/RustCrypto)
+1. **Audited primitives.** brega uses [RustCrypto](https://github.com/RustCrypto)
    crates exclusively (`aes-gcm`, `argon2`, `hkdf`, `srp`, `x25519-dalek`,
    `ed25519-dalek`) and defines **no custom cryptographic primitives**. Those
    crates have been independently reviewed.
@@ -24,7 +24,7 @@ by which users judge whether the marketed guarantees are trustworthy.
    CI advisory checks (`cargo deny`), and the zero-I/O core boundary
    ([ADR-001](ADR-001-rust-zero-io-core.md)).
 
-**The gap.** No external party has reviewed tock's **own** composition of those
+**The gap.** No external party has reviewed brega's **own** composition of those
 primitives: the key hierarchy and 2SKD ([ADR-011](ADR-011-account-based-self-host-two-secret-auth.md)),
 the vault format and AEAD/AAD discipline ([ADR-002](ADR-002-end-to-end-encryption.md),
 [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md)), the SRP-6a handshake
@@ -42,7 +42,7 @@ rather than shipping in silence and letting users assume a review exists.
 
 ## Decision
 
-**tock 1.0 ships with an explicitly documented "pre-audit / unaudited" status.**
+**brega 1.0 ships with an explicitly documented "pre-audit / unaudited" status.**
 We adopt the fallback path sanctioned by the issue's acceptance criteria: rather
 than block 1.0 on an audit that cannot land in time, we make a **deliberate,
 prominent, honest disclosure** and commit to commissioning the review.
@@ -50,7 +50,7 @@ prominent, honest disclosure** and commit to commissioning the review.
 Concretely:
 
 1. **Honest disclosure, prominently placed.** `SECURITY.md` and `README.md`
-   state, up front, that tock's own protocol and implementation are **not yet
+   state, up front, that brega's own protocol and implementation are **not yet
    independently audited** as of 1.0 — only its underlying primitives are. The
    architecture threat model (`docs/architecture.md` §5.5) records the same
    assurance-level caveat. The disclosure explains what "unaudited" means for a

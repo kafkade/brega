@@ -5,18 +5,18 @@
 
 > **Security-sensitive.** Backup is a *new* surface that turns the vault into a
 > portable artifact, so it needs a written format and threat model *before*
-> implementation ([#200](https://github.com/kafkade/tock/issues/200), W4). This
+> implementation ([#200](https://github.com/kafkade/brega/issues/200), W4). This
 > ADR builds directly on [ADR-002](ADR-002-end-to-end-encryption.md) (per-item
 > envelope encryption) and [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md)
 > (app-layer AEAD, plain-SQLite at rest), and inherits the key hierarchy and
 > two-secret unlock of [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md)
 > and the format-stability guarantees of
 > [ADR-013](ADR-013-vault-format-versioning-policy.md). It closes issue
-> [#196](https://github.com/kafkade/tock/issues/196).
+> [#196](https://github.com/kafkade/brega/issues/196).
 
 ## Context
 
-tock is local-first. For a user who never enables sync, the local vault is the
+brega is local-first. For a user who never enables sync, the local vault is the
 **only copy** of their data; for a user who does sync, the server is an
 encrypted blob store that holds ciphertext only and cannot reconstruct anything
 without the client's keys. Either way, a first-class **backup & restore** path is
@@ -31,7 +31,7 @@ are app-layer AEAD (AES-256-GCM under VK-derived keys), but whose **materialized
 domain tables are plaintext at rest**. This is not a corner case — it is where the
 readable data lives:
 
-- `tasks.title`, `tasks.notes` (`crates/tock-storage/src/migrations/0003_domain_tables.sql`)
+- `tasks.title`, `tasks.notes` (`crates/brega-storage/src/migrations/0003_domain_tables.sql`)
 - every habit text field — `title`, `identity`, `cue`, `craving`, `response`,
   `reward`, log `notes` (`0006_habits.sql`)
 - `checklist_items.title` (`0014_checklist_items.sql`)
@@ -48,19 +48,19 @@ Both are grounded in the current implementation:
 1. **Un-synced edits are not yet events.** Domain repositories write directly to
    SQLite and never emit events inline; signed, AEAD-encrypted events are
    **synthesized at sync time** by diffing domain state
-   (`crates/tock-storage/src/sync/mod.rs::collect_local_changes`). An
+   (`crates/brega-storage/src/sync/mod.rs::collect_local_changes`). An
    event-log-only archive captured before a sync therefore **silently omits every
    local change that has not yet been turned into an event.**
 
 2. **Device identity and the Lamport clock live inside the vault.** Each event is
    stamped with the local `device_id` and a per-device monotonic `lamport`, and the
    next value is allocated as "max-for-this-device + 1"
-   (`crates/tock-storage/src/event_log.rs` — `append` / `next_local_lamport`). If a
+   (`crates/brega-storage/src/event_log.rs` — `append` / `next_local_lamport`). If a
    backup is restored onto a *second, still-live* device without changing identity,
    two writers share one `device_id` and one Lamport sequence, which breaks the
    ordering and duplicate-rejection invariants sync relies on. Worse, sync **pushes
    local events before it reconciles remote history**
-   (`crates/tock-cli/src/commands/sync_cmd.rs` — push precedes pull/ingest), so a
+   (`crates/brega-cli/src/commands/sync_cmd.rs` — push precedes pull/ingest), so a
    stale restore can shove old state ahead of newer remote state.
 
 A backup ADR must answer all three: keep the archive confidential, make it
@@ -175,15 +175,15 @@ beyond what they already hold.
 It follows that the **Emergency Kit / Secret Key must be stored separately from the
 backup file** (mirroring `docs/self-hosting.md` §8). A backup file and the Secret
 Key kept together are a single point of compromise; kept apart, a stolen backup is
-inert. As with all of tock, losing the Secret Key with no Emergency Kit is
+inert. As with all of brega, losing the Secret Key with no Emergency Kit is
 unrecoverable by design (ADR-011) — a backup does **not** change that.
 
 ### 5. Backup is not export
 
-`tock-export` produces **plaintext, lossy** output for **portability** (moving data
+`brega-export` produces **plaintext, lossy** output for **portability** (moving data
 to another tool). It is explicitly **not** a backup:
 
-| | Backup (this ADR) | Export (`tock-export`) |
+| | Backup (this ADR) | Export (`brega-export`) |
 | --- | --- | --- |
 | Confidentiality | Encrypted (outer AEAD under `BK`) | **Plaintext** |
 | Fidelity | Lossless, restorable | Lossy (no keys, clocks, sync state) |
@@ -229,7 +229,7 @@ implements the format and modes defined here.
 **Neutral:**
 
 - This ADR defines the format and modes; the implementation lands in
-  [#200](https://github.com/kafkade/tock/issues/200).
+  [#200](https://github.com/kafkade/brega/issues/200).
 - The backup snapshot is distinct from the **sync** snapshot/compaction (architecture
   §6.4): the sync snapshot is a per-vault event-store cache keyed by
   `HKDF(VK, "Tock/v1/snapshot/…")`; a backup is a self-contained, outer-encrypted

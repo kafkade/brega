@@ -3,29 +3,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "Tock",
+    name: "Brega",
     platforms: [
         .iOS(.v17),
         .macOS(.v14),
     ],
     products: [
         .library(
-            name: "TockSwift",
-            targets: ["TockSwift"]
+            name: "BregaSwift",
+            targets: ["BregaSwift"]
         ),
     ],
     targets: [
-        // Pre-compiled Rust static library (libtock_uniffi.a) packaged as an
-        // XCFramework, exposing the C FFI module `tock_uniffiFFI` consumed by
+        // Pre-compiled Rust static library (libbrega_uniffi.a) packaged as an
+        // XCFramework, exposing the C FFI module `brega_uniffiFFI` consumed by
         // the generated Swift bindings. Built by `cargo xtask xcframework`
         // (gitignored — regenerated on demand).
         .binaryTarget(
-            name: "TockFFIBinary",
-            path: "TockFFI.xcframework"
+            name: "BregaFFIBinary",
+            path: "BregaFFI.xcframework"
         ),
 
         // UniFFI-generated Swift bindings. The single file
-        // `Sources/TockFFI/tock_uniffi.swift` is emitted by
+        // `Sources/BregaFFI/brega_uniffi.swift` is emitted by
         // `cargo xtask xcframework` (gitignored). `Placeholder.swift` keeps
         // the directory tracked before generation has run.
         //
@@ -34,23 +34,23 @@ let package = Package(
         //     cargo xtask xcframework
         //
         .target(
-            name: "TockFFI",
-            dependencies: ["TockFFIBinary"],
-            path: "Sources/TockFFI"
+            name: "BregaFFI",
+            dependencies: ["BregaFFIBinary"],
+            path: "Sources/BregaFFI"
         ),
 
         // Idiomatic Swift wrapper: async/await, Sendable conformances,
         // and SwiftUI-friendly extensions.
         .target(
-            name: "TockSwift",
-            dependencies: ["TockFFI"],
-            path: "Sources/TockSwift"
+            name: "BregaSwift",
+            dependencies: ["BregaFFI"],
+            path: "Sources/BregaSwift"
         ),
 
         .testTarget(
-            name: "TockSwiftTests",
-            dependencies: ["TockSwift"],
-            path: "Tests/TockSwiftTests"
+            name: "BregaSwiftTests",
+            dependencies: ["BregaSwift"],
+            path: "Tests/BregaSwiftTests"
         ),
     ]
 )

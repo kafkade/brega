@@ -1,6 +1,6 @@
-# Translating tock
+# Translating brega
 
-tock's command-line interface is localized with [Project Fluent](https://projectfluent.org/),
+brega's command-line interface is localized with [Project Fluent](https://projectfluent.org/),
 wired up through the [`i18n-embed`](https://crates.io/crates/i18n-embed) stack.
 English (`en-US`) is the source locale and always ships complete; every other
 locale is a community translation of it.
@@ -11,16 +11,16 @@ required to translate — you only edit `.ftl` text files.
 ## Where the strings live
 
 ```text
-crates/tock-cli/
+crates/brega-cli/
 ├── i18n.toml              # fallback_language = "en-US"
 └── i18n/
     └── en-US/
-        └── tock-cli.ftl   # the source catalog (English)
+        └── brega-cli.ftl   # the source catalog (English)
 ```
 
 Each locale is a directory named with a [BCP-47](https://www.rfc-editor.org/info/bcp47)
 tag (`en-US`, `es-ES`, `fr`, `de`, `pt-BR`, …) containing a single
-`tock-cli.ftl` file. The filename **must** be `tock-cli.ftl` (it matches the
+`brega-cli.ftl` file. The filename **must** be `brega-cli.ftl` (it matches the
 crate name; the build relies on this).
 
 ## Adding a new language
@@ -28,16 +28,16 @@ crate name; the build relies on this).
 1. Copy the English catalog into a new locale directory, e.g. for Spanish:
 
    ```sh
-   mkdir -p crates/tock-cli/i18n/es-ES
-   cp crates/tock-cli/i18n/en-US/tock-cli.ftl crates/tock-cli/i18n/es-ES/tock-cli.ftl
+   mkdir -p crates/brega-cli/i18n/es-ES
+   cp crates/brega-cli/i18n/en-US/brega-cli.ftl crates/brega-cli/i18n/es-ES/brega-cli.ftl
    ```
 
-2. Translate the text in `es-ES/tock-cli.ftl` (see rules below).
+2. Translate the text in `es-ES/brega-cli.ftl` (see rules below).
 3. Validate (see [Validating](#validating)).
-4. Try it: `cargo run -p tock-cli -- --lang es-ES list` (or set `TOCK_LANG=es-ES`).
+4. Try it: `cargo run -p brega-cli -- --lang es-ES list` (or set `BREGA_LANG=es-ES`).
 5. Open a pull request.
 
-The app picks a locale in this order: the `--lang` flag, the `TOCK_LANG`
+The app picks a locale in this order: the `--lang` flag, the `BREGA_LANG`
 environment variable, your operating-system locale (`LANG` / `LC_*`), and
 finally `en-US`. Any string missing from a translation automatically falls back
 to English, so a partial translation is still usable.
@@ -49,7 +49,7 @@ A catalog is a list of `id = value` messages:
 ```ftl
 ## CalDAV
 
-# Shown after `tock caldav remove <url>` succeeds.
+# Shown after `brega caldav remove <url>` succeeds.
 caldav-collection-removed = Removed CalDAV collection: { $url }
 caldav-all-links-deleted = All links to this collection have been deleted.
 ```
@@ -114,7 +114,7 @@ parity so drift is visible).
 Also run the build to exercise the compile-time message check used by the code:
 
 ```sh
-cargo build -p tock-cli
+cargo build -p brega-cli
 ```
 
 ## For developers: adding new user-facing strings
@@ -126,15 +126,15 @@ println!("{}", tr!("task-added", sid = task.sid));
 ```
 
 `tr!` wraps `i18n_embed_fl::fl!`, which checks **at compile time** that the id
-exists in `crates/tock-cli/i18n/en-US/tock-cli.ftl`. So:
+exists in `crates/brega-cli/i18n/en-US/brega-cli.ftl`. So:
 
-1. Add the message to `en-US/tock-cli.ftl` (with a `#` context comment and,
+1. Add the message to `en-US/brega-cli.ftl` (with a `#` context comment and,
    under the right `## Domain` header).
 2. Use `tr!("your-id", name = value, …)` at the call site. Each interpolated
    value is passed as a named argument matching a `{ $name }` placeholder.
 3. Keep machine-readable output (JSON via `--format json`) and `tracing` logs in
    English — only localize human-facing prose.
-4. Run `cargo xtask i18n-check` and `cargo build -p tock-cli`.
+4. Run `cargo xtask i18n-check` and `cargo build -p brega-cli`.
 
 Id naming convention: `domain-action`, kebab-case (e.g. `focus-session-started`,
 `error-unsupported-format`). Reuse an existing id when the same English text

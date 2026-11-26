@@ -1,8 +1,8 @@
-// Self-service account client for the tock web app (issue #131). HTTP lives here
-// (per ADR-001); all rotation crypto runs in `tock-wasm`. Every call is scoped
+// Self-service account client for the brega web app (issue #131). HTTP lives here
+// (per ADR-001); all rotation crypto runs in `brega-wasm`. Every call is scoped
 // to the signed-in user's own account via their session bearer token.
 
-import { rotate_password, build_setup_code } from "tock-wasm";
+import { rotate_password, build_setup_code } from "brega-wasm";
 import { ensureWasm, type Session } from "./account";
 
 /** Session auth for self-service calls. Channel binding is optional (these
@@ -47,7 +47,7 @@ function authHeaders(auth: SessionAuth): Record<string, string> {
   const h: Record<string, string> = {
     Authorization: ["Bearer", auth.bearerToken].join(" "),
   };
-  if (auth.channelBinding) h["X-Tock-Channel-Binding"] = auth.channelBinding;
+  if (auth.channelBinding) h["X-Brega-Channel-Binding"] = auth.channelBinding;
   return h;
 }
 

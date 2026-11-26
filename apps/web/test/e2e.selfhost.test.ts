@@ -1,7 +1,7 @@
-// TRUE end-to-end smoke test of the self-host path against a REAL `tock-server`.
+// TRUE end-to-end smoke test of the self-host path against a REAL `brega-server`.
 //
-// Opt-in only: set TOCK_E2E=1 to run it. It builds and boots `tock-server` on a
-// throwaway SQLite data dir + random port, then drives the REAL `tock-wasm`
+// Opt-in only: set BREGA_E2E=1 to run it. It builds and boots `brega-server` on a
+// throwaway SQLite data dir + random port, then drives the REAL `brega-wasm`
 // client through the whole first-run flow the browser performs:
 //
 //   first-run admin creation → save Emergency Kit → SRP login → authed admin call
@@ -10,8 +10,8 @@
 // the raw password and Secret Key are never sent — verified against a live
 // server, not stubs.
 //
-//   TOCK_E2E=1 npm test          # run everything including this
-//   TOCK_E2E=1 npx vitest run test/e2e.selfhost.test.ts
+//   BREGA_E2E=1 npm test          # run everything including this
+//   BREGA_E2E=1 npx vitest run test/e2e.selfhost.test.ts
 //
 // Skipped by default so the standard `web` CI job stays fast and server-free;
 // the self-contained WASM assertions live in smoke.selfhost.test.ts.
@@ -22,13 +22,13 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import init from "tock-wasm";
+import init from "brega-wasm";
 
-const RUN_E2E = Boolean(process.env.TOCK_E2E);
+const RUN_E2E = Boolean(process.env.BREGA_E2E);
 
 const REPO_ROOT = resolve(process.cwd(), "../..");
-const SERVER_BIN = resolve(REPO_ROOT, "target/debug/tock-server");
-const WASM_PATH = resolve(process.cwd(), "../../crates/tock-wasm/pkg/tock_wasm_bg.wasm");
+const SERVER_BIN = resolve(REPO_ROOT, "target/debug/brega-server");
+const WASM_PATH = resolve(process.cwd(), "../../crates/brega-wasm/pkg/brega_wasm_bg.wasm");
 
 function freePort(): Promise<number> {
   return new Promise((res, rej) => {
@@ -61,7 +61,7 @@ async function waitForServer(base: string, timeoutMs = 30_000): Promise<void> {
   throw new Error(`server never became ready: ${String(lastErr)}`);
 }
 
-describe.skipIf(!RUN_E2E)("self-host e2e against a live tock-server", () => {
+describe.skipIf(!RUN_E2E)("self-host e2e against a live brega-server", () => {
   let child: ChildProcess | null = null;
   let dataDir = "";
   let base = "";
@@ -70,7 +70,7 @@ describe.skipIf(!RUN_E2E)("self-host e2e against a live tock-server", () => {
 
   beforeAll(async () => {
     // Build the server binary (cached after the first run).
-    execFileSync("cargo", ["build", "-p", "tock-server"], {
+    execFileSync("cargo", ["build", "-p", "brega-server"], {
       cwd: REPO_ROOT,
       stdio: "inherit",
     });
@@ -79,15 +79,15 @@ describe.skipIf(!RUN_E2E)("self-host e2e against a live tock-server", () => {
 
     const port = await freePort();
     base = `http://127.0.0.1:${port}`;
-    dataDir = mkdtempSync(join(tmpdir(), "tock-e2e-"));
+    dataDir = mkdtempSync(join(tmpdir(), "brega-e2e-"));
 
     child = spawn(SERVER_BIN, [], {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
-        TOCK_BIND: `127.0.0.1:${port}`,
-        TOCK_DATA_DIR: dataDir,
-        TOCK_MODE: "self-hosted",
+        BREGA_BIND: `127.0.0.1:${port}`,
+        BREGA_DATA_DIR: dataDir,
+        BREGA_MODE: "self-hosted",
         RUST_LOG: "warn",
       },
       stdio: ["ignore", "ignore", "inherit"],

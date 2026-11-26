@@ -5,7 +5,7 @@
 
 ## Context
 
-Tock's Rust core must expose the same API to multiple platforms:
+Brega's Rust core must expose the same API to multiple platforms:
 
 - **CLI:** Direct Rust binary (native, no FFI).
 - **iOS/iPadOS/macOS:** SwiftUI apps requiring Swift bindings.
@@ -17,19 +17,19 @@ Hand-written FFI is error-prone and diverges across platforms. C-ABI FFI require
 ## Decision
 
 **CLI:**
-Native Rust binary (`tock-cli`) linking `tock-core` directly. Zero FFI overhead. Uses `clap` for argument parsing, `ratatui` for TUI, and `tokio` (single-threaded runtime) for async I/O (networking, filesystem watches).
+Native Rust binary (`brega-cli`) linking `brega-core` directly. Zero FFI overhead. Uses `clap` for argument parsing, `ratatui` for TUI, and `tokio` (single-threaded runtime) for async I/O (networking, filesystem watches).
 
 **Apple platforms (iOS, iPadOS, macOS, watchOS):**
 UniFFI 0.28+ generates Swift bindings from Rust:
-- `tock-uniffi` crate exposes a high-level facade: `Workspace`, `TaskRepo`, `HabitRepo`, `TimeRepo`, `FocusController`, `SyncClient`.
+- `brega-uniffi` crate exposes a high-level facade: `Workspace`, `TaskRepo`, `HabitRepo`, `TimeRepo`, `FocusController`, `SyncClient`.
 - `.udl` files generated from `#[uniffi::export]` macros.
 - Built as `staticlib` + `cdylib`; `xtask` script uses `lipo` to combine `arm64-ios`, `arm64-ios-sim`, `arm64-macos`, `x86_64-macos` into an `.xcframework`.
 - UniFFI async support backed by a `tokio` current-thread runtime owned by the shim (core remains synchronous).
 - watchOS gets a minimal subset (habit logging, timer start/stop) to fit memory and UX constraints.
 
 **Web:**
-- `tock-core` compiled to `wasm32-unknown-unknown` with `wasm-bindgen`.
-- `tock-storage-web` provides IndexedDB storage (same trait as `rusqlite` storage).
+- `brega-core` compiled to `wasm32-unknown-unknown` with `wasm-bindgen`.
+- `brega-storage-web` provides IndexedDB storage (same trait as `rusqlite` storage).
 - Sync uses `fetch` via `web-sys`.
 - Distributed as an npm package.
 
@@ -50,5 +50,5 @@ UniFFI 0.28+ generates Swift bindings from Rust:
 - UniFFI async support requires a hidden Tokio runtime in the shim (not in core, but present in the app).
 
 **Neutral:**
-- watchOS subset requires maintaining a smaller API surface (documented in `tock-uniffi/watchos.rs`).
+- watchOS subset requires maintaining a smaller API surface (documented in `brega-uniffi/watchos.rs`).
 - npm package versioning must stay synchronized with Rust crate versions (automated via CI).

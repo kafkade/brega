@@ -1,10 +1,10 @@
 # bindings/swift
 
-Swift Package wrapping the tock Rust core via UniFFI. Provides:
+Swift Package wrapping the brega Rust core via UniFFI. Provides:
 
-- **TockFFI** — auto-generated Swift + C header from `tock-uniffi` (via
+- **BregaFFI** — auto-generated Swift + C header from `brega-uniffi` (via
   `uniffi-bindgen`)
-- **TockSwift** — idiomatic async/await wrapper layer for SwiftUI apps
+- **BregaSwift** — idiomatic async/await wrapper layer for SwiftUI apps
 
 ## Prerequisites
 
@@ -26,13 +26,13 @@ cargo xtask xcframework
 This single task (see `xtask/src/main.rs`):
 
 1. Installs the four Apple Rust targets (idempotent).
-2. Builds `tock-uniffi` for each target with the `apple-ffi` profile.
+2. Builds `brega-uniffi` for each target with the `apple-ffi` profile.
 3. Runs `uniffi-bindgen` and writes the Swift bindings to
-   `Sources/TockFFI/tock_uniffi.swift`.
+   `Sources/BregaFFI/brega_uniffi.swift`.
 4. `lipo`s the two macOS slices and runs `xcodebuild -create-xcframework`
-   to produce `TockFFI.xcframework`.
+   to produce `BregaFFI.xcframework`.
 
-Both `tock_uniffi.swift` and `TockFFI.xcframework/` are **gitignored** — they
+Both `brega_uniffi.swift` and `BregaFFI.xcframework/` are **gitignored** — they
 are build outputs. Run the task once before `swift build`/`swift test`.
 
 > **Why a dedicated `apple-ffi` Cargo profile?** The workspace `release`
@@ -47,7 +47,7 @@ cd bindings/swift
 swift test
 ```
 
-The tests in `Tests/TockSwiftTests` open an encrypted vault and round-trip
+The tests in `Tests/BregaSwiftTests` open an encrypted vault and round-trip
 tasks, projects, areas, tags, time blocks, focus sessions, and habits through
 the real Rust core (macOS / arm64 slice).
 
@@ -58,7 +58,7 @@ the real Rust core (macOS / arm64 slice).
 .package(path: "../bindings/swift")
 
 // Import in your Swift code
-import TockSwift
+import BregaSwift
 ```
 
 ## Architecture
@@ -94,7 +94,7 @@ The UniFFI facade exposes a `Workspace` object with methods for:
 
 ### Async (future)
 
-The current FFI API is synchronous. The `TockSwift` wrapper dispatches
+The current FFI API is synchronous. The `BregaSwift` wrapper dispatches
 calls onto a background `DispatchQueue`. A future version will use
 UniFFI's native async support with a Tokio runtime in the Rust shim
 (per ADR-005 §4.3.1).

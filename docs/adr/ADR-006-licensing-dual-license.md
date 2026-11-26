@@ -5,7 +5,7 @@
 
 ## Context
 
-Tock's licensing must balance:
+Brega's licensing must balance:
 
 1. **Community contribution:** Permissive licensing encourages adoption and contributions.
 2. **User freedom:** Users must be able to self-host, fork, and modify without restriction.
@@ -19,18 +19,18 @@ Fully permissive licenses (MIT, Apache-2.0) allow SaaS exploitation. Fully copyl
 **Dual licensing:**
 
 1. **Core, CLI, bindings, and apps: Apache-2.0**
-   - `tock-core`, `tock-crypto`, `tock-parse`, `tock-storage`, `tock-sync`, `tock-import`, `tock-export`, `tock-cli`, `tock-uniffi`.
+   - `brega-core`, `brega-crypto`, `brega-parse`, `brega-storage`, `brega-sync`, `brega-import`, `brega-export`, `brega-cli`, `brega-uniffi`.
    - Swift bindings, iOS/iPadOS/macOS/watchOS apps.
    - WASM bindings and web client.
 
 2. **Sync server: AGPL-3.0**
-   - `tock-server` (Axum-based HTTP sync server).
+   - `brega-server` (Axum-based HTTP sync server).
 
 **Rationale:**
-- Apache-2.0 client code allows integration into proprietary apps (e.g., a company embedding Tock's CLI in their internal tools).
+- Apache-2.0 client code allows integration into proprietary apps (e.g., a company embedding Brega's CLI in their internal tools).
 - AGPL-3.0 server ensures any third party offering hosted sync as a service must publish their modifications (including deployment scripts, if they constitute a modified version).
 - Self-hosting remains free forever (AGPL permits private modifications).
-- This prevents a competitor from forking `tock-server`, adding proprietary extensions, and running a closed SaaS without contributing back.
+- This prevents a competitor from forking `brega-server`, adding proprietary extensions, and running a closed SaaS without contributing back.
 
 **Compatibility:**
 Apache-2.0 is GPL-compatible (clients can link AGPL server code if they choose). AGPL server cannot link Apache-2.0 client libraries without triggering AGPL obligations, but the sync protocol is pure HTTP/JSON, so no linking occurs.
@@ -41,7 +41,7 @@ Apache-2.0 is GPL-compatible (clients can link AGPL server code if they choose).
 - Client code is maximally permissive (encourages adoption, corporate use, forks).
 - AGPL server prevents SaaS exploitation (competitors must open-source their hosted sync forks).
 - Self-hosting is free and unencumbered (AGPL allows private modifications).
-- Clear licensing split aligns with Tock's open core + paid hosted sync business model.
+- Clear licensing split aligns with Brega's open core + paid hosted sync business model.
 
 **Negative:**
 - Dual licensing adds complexity (contributors must understand which components fall under which license).
@@ -54,12 +54,12 @@ Apache-2.0 is GPL-compatible (clients can link AGPL server code if they choose).
 ## Addendum: self-host deployment topology (#132)
 
 The one-command self-host stack ships the **web console as a separate
-`tock-web` container** (Apache-2.0) rather than embedding it in the AGPL
-`tock-server` binary. The console talks to the server only over HTTP — the
+`brega-web` container** (Apache-2.0) rather than embedding it in the AGPL
+`brega-server` binary. The console talks to the server only over HTTP — the
 arm's-length aggregation boundary — so it remains a separate work, and the
 existing split above holds unchanged:
 
-- `tock-server` (AGPL-3.0) satisfies its network-source obligation because its
+- `brega-server` (AGPL-3.0) satisfies its network-source obligation because its
   Corresponding Source is this public repository.
 - The console stays Apache-2.0 and reusable outside the server context.
 

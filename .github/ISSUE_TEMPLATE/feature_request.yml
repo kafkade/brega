@@ -9,7 +9,7 @@ body:
         Thanks for suggesting a feature! Please describe your idea below.
 
         **Note:** Features that require the server to access plaintext user data
-        are incompatible with tock's zero-knowledge architecture and will not be accepted.
+        are incompatible with brega's zero-knowledge architecture and will not be accepted.
   - type: textarea
     id: problem
     attributes:
