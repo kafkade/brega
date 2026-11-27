@@ -81,7 +81,7 @@ uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 time = { version = "0.3", default-features = false, features = ["std", "macros", "formatting", "parsing", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.40", features = ["bundled", "blob", "uuid", "time"] }
+rusqlite = { version = "0.41", features = ["bundled", "blob", "uuid", "time"] }
 # Unicode NFKC normalization for server-side identifier canonicalization
 # (issue #199). Already in the tree transitively; MIT/Apache-2.0.
 unicode-normalization = "0.1"

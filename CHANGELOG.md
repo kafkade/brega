@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Upgrade bundled SQLite and URL parsing dependencies to address
+  RUSTSEC-2026-0459 and RUSTSEC-2026-0592.
 - **Corrected the at-rest encryption documentation**: SECURITY.md and ADR-014
   claimed task and habit contents were encrypted at rest. Only event-log payloads
   and device keys are; the domain tables are plaintext in the vault file. The

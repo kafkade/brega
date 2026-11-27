@@ -35,11 +35,7 @@ pub struct RowSnap {
 pub fn snapshot_table(conn: &Connection, table: &SyncTable) -> Result<Vec<RowSnap>, Error> {
     let sql = format!("SELECT * FROM {}", table.table);
     let mut stmt = conn.prepare(&sql)?;
-    let col_names: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let col_names: Vec<String> = stmt.column_names().map(str::to_owned).collect();
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
@@ -169,11 +165,7 @@ pub fn load_row(
     let (where_sql, values) = key_predicate(table, key_columns)?;
     let sql = format!("SELECT * FROM {} WHERE {where_sql} LIMIT 1", table.table);
     let mut stmt = conn.prepare(&sql)?;
-    let col_names: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let col_names: Vec<String> = stmt.column_names().map(str::to_owned).collect();
     let mut rows = stmt.query(params_from_iter(values.iter()))?;
     match rows.next()? {
         Some(row) => {

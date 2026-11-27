@@ -198,7 +198,7 @@ pub fn snapshot(conn: &Connection) -> Result<SnapshotHandle, Error> {
         }
         let pk_cols = primary_key_columns(conn, table)?;
         let mut stmt = conn.prepare(&format!("SELECT * FROM {table}"))?;
-        let col_names: Vec<String> = stmt.column_names().into_iter().map(str::to_owned).collect();
+        let col_names: Vec<String> = stmt.column_names().map(str::to_owned).collect();
         let mut rows = stmt.query([])?;
         let mut table_map: std::collections::HashMap<String, Row> =
             std::collections::HashMap::new();
