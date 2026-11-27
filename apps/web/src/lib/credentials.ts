@@ -13,7 +13,7 @@ export interface StoredCredentials {
   session: Session;
 }
 
-const KEY = "tock.session.v1";
+const KEY = "brega.session.v1";
 
 export interface CredentialStore {
   save(c: StoredCredentials): void;

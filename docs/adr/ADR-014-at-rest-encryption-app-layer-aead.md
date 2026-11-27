@@ -1,14 +1,22 @@
 # ADR-014: At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-021](ADR-021-iphone-mac-first-product-direction.md) (D-14: SQLCipher for v1)
 **Date:** 2026-07-02
 
+> **Correction (2026-11-26).** §2 below is inaccurate. Only event-log payloads and
+> device signing keys are AEAD-encrypted. The materialized domain tables
+> (`tasks.title`/`notes`, habit text fields, checklist titles) and the undo log
+> are **plaintext** in the SQLite file and readable without the password or
+> Secret Key; [ADR-018](ADR-018-backup-restore-format-and-modes.md) documents
+> this correctly. ADR-021 replaces this decision with SQLCipher keyed by the
+> vault key.
+>
 > **Amends [ADR-004](ADR-004-sqlite-app-layer-encryption.md).** ADR-004's
 > *Decision* section specified the CLI would store data in an `rusqlite` database
 > with **bundled SQLCipher** (AES-256-CBC page-level encryption, keyed by VK).
 > The build that ships for 1.0 does **not** use SQLCipher: it stores a **plain
 > SQLite** file whose *sensitive payloads* are encrypted at the **application
-> layer** with `tock-crypto` (AES-256-GCM AEAD). This ADR ratifies the shipped
+> layer** with `brega-crypto` (AES-256-GCM AEAD). This ADR ratifies the shipped
 > app-layer-AEAD approach as the **1.0 at-rest decision**, records the security
 > trade-off versus SQLCipher, and moves SQLCipher integration to a tracked
 > **post-1.0** enhancement. Everything else in ADR-004 (SQLite as the engine,
@@ -17,7 +25,7 @@
 
 ## Context
 
-This ADR closes issue [#172](https://github.com/kafkade/tock/issues/172).
+This ADR closes issue [#172](https://github.com/kafkade/brega/issues/172).
 
 ADR-004 was written as a forward-looking design and assumed the CLI would open
 its database through SQLCipher so the *entire* file — every page — is encrypted
@@ -26,33 +34,33 @@ incremental path, and the two have since disagreed. That disagreement is a
 governance gap to close before 1.0's stability commitment.
 
 **What actually shipped.** The storage layer
-(`crates/tock-storage/src/vault.rs`) opens a **plain SQLite** database. The vault
+(`crates/brega-storage/src/vault.rs`) opens a **plain SQLite** database. The vault
 header lives in a `vault_meta` table; the append-only event log stores each
-event's **payload** encrypted with `tock-crypto` AEAD (AES-256-GCM) under a key
+event's **payload** encrypted with `brega-crypto` AEAD (AES-256-GCM) under a key
 derived from VK (see `docs/architecture.md` §5.3). Per-device signing-key bytes
 are likewise AEAD-wrapped under a VK-derived key before storage. The build marks
 its format explicitly so a future migration can detect and upgrade it
-(`crates/tock-core/src/vault/header.rs`):
+(`crates/brega-core/src/vault/header.rs`):
 
 ```rust
-// tock-core/src/vault/header.rs
+// brega-core/src/vault/header.rs
 pub const STORAGE_LAYOUT_V0: &str = "sqlite-plain-app-aead-v0";
 ```
 
 The `storage_layout` field is written into the vault header and surfaced in
-`tock` status output, so the on-disk format is self-describing and a later
+`brega` status output, so the on-disk format is self-describing and a later
 SQLCipher-backed layout can be introduced as a distinct, detectable marker.
 
 **Why the deviation happened / why it is acceptable for 1.0.** App-layer AEAD:
 
 - Keeps the sensitive payloads (event contents, device keys) confidential at rest
-  under the same audited RustCrypto primitives used everywhere else in tock — no
+  under the same audited RustCrypto primitives used everywhere else in brega — no
   second, differently-implemented cryptographic stack (SQLCipher's AES-256-CBC +
   HMAC page format) to vet and keep correct.
 - Shares one key hierarchy and one AAD/domain-separation discipline with the
   sync envelope, so a payload is protected identically whether it is at rest in
   the local DB or in transit to an untrusted server. This is the property that
-  actually matters for tock's primary threat (a hostile sync host), and it holds
+  actually matters for brega's primary threat (a hostile sync host), and it holds
   today without SQLCipher.
 - Avoids pulling a bundled OpenSSL/SQLCipher build into the WASM and
   cross-platform targets during the 1.0 push, keeping the build surface and the
@@ -117,7 +125,7 @@ SQLCipher remains planned.
 ### 3. SQLCipher moves to a tracked post-1.0 enhancement
 
 Bundled-SQLCipher page-level encryption is **removed as a 1.0 commitment** and
-tracked as a post-1.0 enhancement ([#182](https://github.com/kafkade/tock/issues/182)).
+tracked as a post-1.0 enhancement ([#182](https://github.com/kafkade/brega/issues/182)).
 The header already reserves the transition: `STORAGE_LAYOUT_V0` distinguishes
 today's format so a future
 `sqlite-sqlcipher-*` layout can be introduced with an automatic migration under
@@ -155,6 +163,6 @@ header-only at-rest exposure.
 - No code change is required to enact this decision — the shipped build already
   implements it; this ADR makes it the recorded policy and corrects ADR-004,
   `SECURITY.md`, and the `docs/architecture.md` §5 threat model to match.
-- The security posture against tock's *primary* adversary (a hostile sync host)
+- The security posture against brega's *primary* adversary (a hostile sync host)
   is unchanged: that path never depended on SQLCipher — event payloads carry
   their own AEAD envelope regardless of local storage format.

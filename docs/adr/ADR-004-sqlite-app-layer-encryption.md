@@ -7,7 +7,7 @@
 > *Decision* below specifies **bundled SQLCipher** (page-level AES-256-CBC keyed
 > by VK) for CLI at-rest encryption. The build that ships for 1.0 does **not**
 > use SQLCipher: it stores a **plain SQLite** file whose sensitive payloads are
-> encrypted at the **application layer** with `tock-crypto` (AES-256-GCM AEAD),
+> encrypted at the **application layer** with `brega-crypto` (AES-256-GCM AEAD),
 > marked `storage_layout = "sqlite-plain-app-aead-v0"`. ADR-014 ratifies that
 > shipped approach as the 1.0 at-rest decision, records the trade-off versus
 > SQLCipher, and moves SQLCipher to a tracked **post-1.0** enhancement. Read the
@@ -17,7 +17,7 @@
 
 ## Context
 
-Tock needs durable storage for tasks, habits, time blocks, focus sessions, and sync events. The database must be:
+Brega needs durable storage for tasks, habits, time blocks, focus sessions, and sync events. The database must be:
 
 1. Encrypted at rest to protect against disk theft.
 2. Fast enough for sub-50ms queries on 10,000+ tasks.
@@ -29,16 +29,16 @@ NoSQL stores (e.g., IndexedDB alone) lack expressive query support. Cloud-native
 
 ## Decision
 
-Tock uses **SQLite with app-layer encryption**:
+Brega uses **SQLite with app-layer encryption**:
 
 **Storage layer:**
 - CLI: `rusqlite` with bundled SQLCipher (AES-256-CBC page-level encryption, keyed by VK). *(Deferred post-1.0 per [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md); 1.0 ships plain SQLite with app-layer AEAD.)*
-- WASM: `tock-storage-web` using IndexedDB with the same schema (encrypted blobs).
+- WASM: `brega-storage-web` using IndexedDB with the same schema (encrypted blobs).
 
 **Schema strategy:**
 - No ORM. Direct SQL with typed Rust structs via `rusqlite::Row::get()`.
 - Schema versioned via `PRAGMA user_version`.
-- Migrations embedded in `tock-core` as `include_str!("migrations/*.sql")`.
+- Migrations embedded in `brega-core` as `include_str!("migrations/*.sql")`.
 - Each migration has a SHA-256 checksum verified at startup.
 - Additive-only migrations within major versions (no destructive changes).
 - Backward compatibility enforced: vaults carry a `min_compatible_version` in the header; older clients refuse to open newer vaults.
@@ -58,7 +58,7 @@ Hybrid EAV + JSON approach:
 Targeted indexes for common queries (Today view, urgency sort, project drill-down, time reports). Partial indexes for sparse columns (e.g., `WHERE end_ts IS NULL` for running time blocks).
 
 **Concurrency:**
-Single-writer, multiple-reader (SQLite default). Vault locked at process level; concurrent writes from the same device serialized via `tock-storage` mutex.
+Single-writer, multiple-reader (SQLite default). Vault locked at process level; concurrent writes from the same device serialized via `brega-storage` mutex.
 
 ## Consequences
 
@@ -70,8 +70,8 @@ Single-writer, multiple-reader (SQLite default). Vault locked at process level; 
 
 **Negative:**
 - SQLCipher adds ~10% overhead vs. unencrypted SQLite (acceptable trade-off). *(Not incurred in 1.0 — SQLCipher is deferred; see [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md).)*
-- WASM storage (IndexedDB) requires shimming SQLite semantics (manageable for Tock's query patterns).
+- WASM storage (IndexedDB) requires shimming SQLite semantics (manageable for Brega's query patterns).
 - Virtual columns for UDAs must be declared before indexing (one-time `ALTER TABLE` per UDA).
 
 **Neutral:**
-- No ORM means manual SQL, but Tock's query surface is well-defined (all queries documented in architecture spec).
+- No ORM means manual SQL, but Brega's query surface is well-defined (all queries documented in architecture spec).

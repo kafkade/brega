@@ -100,7 +100,7 @@ export function App() {
 
   return (
     <main style={{ maxWidth: 720, margin: "2rem auto", fontFamily: "system-ui" }}>
-      <h1>tock</h1>
+      <h1>brega</h1>
 
       {view === "loading" && <p role="status">Checking instance…</p>}
 

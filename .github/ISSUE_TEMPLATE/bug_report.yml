@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in tock
+description: Report a bug in brega
 title: "[Bug]: "
 labels: ["bug", "triage"]
 body:
@@ -11,7 +11,7 @@ body:
     id: component
     attributes:
       label: Component
-      description: Which part of tock is affected?
+      description: Which part of brega is affected?
       options:
         - CLI tool
         - iOS / iPad app
@@ -28,7 +28,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: App version or commit hash (`tock --version` for CLI)
+      description: App version or commit hash (`brega --version` for CLI)
       placeholder: "0.1.0 or abc1234"
   - type: dropdown
     id: os
@@ -72,7 +72,7 @@ body:
       label: Steps to reproduce
       description: How can we reproduce this behavior?
       placeholder: |
-        1. Run `tock ...`
+        1. Run `brega ...`
         2. ...
         3. See error
     validations:

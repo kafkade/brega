@@ -6,7 +6,7 @@
 //! ## Subcommands
 //!
 //! * `xcframework` — regenerate the `UniFFI` Swift bindings and build the
-//!   `TockFFI.xcframework` consumed by `bindings/swift`. See issue #119 and
+//!   `BregaFFI.xcframework` consumed by `bindings/swift`. See issue #119 and
 //!   ADR-005.
 //! * `i18n-check` — validate localization catalogs (id parity + parse).
 
@@ -22,9 +22,9 @@ const IOS_DEVICE_TARGET: &str = "aarch64-apple-ios";
 /// iOS simulator target (Apple-silicon hosts).
 const IOS_SIM_TARGET: &str = "aarch64-apple-ios-sim";
 /// The crate built into the FFI static library.
-const FFI_CRATE: &str = "tock-uniffi";
+const FFI_CRATE: &str = "brega-uniffi";
 /// Base name of the produced static library (`lib<name>.a`).
-const FFI_LIB_STEM: &str = "tock_uniffi";
+const FFI_LIB_STEM: &str = "brega_uniffi";
 /// Cargo profile used for the FFI build. A dedicated profile (rather than
 /// `release`) keeps symbols: the workspace `release` profile sets
 /// `strip = "symbols"`, which would remove the `#[no_mangle]` `UniFFI`
@@ -64,19 +64,19 @@ fn print_help() {
          SUBCOMMANDS:\n  \
            help           Show this message\n  \
            i18n-check     Validate localization catalogs (id parity + parse)\n  \
-           xcframework    Regenerate UniFFI Swift bindings + build TockFFI.xcframework\n\n\
+           xcframework    Regenerate UniFFI Swift bindings + build BregaFFI.xcframework\n\n\
          Future subcommands (per docs/architecture.md §4.4):\n  \
          check-purity, cli-snapshot, wasm-build"
     );
 }
 
-/// Regenerate the Swift bindings and assemble `TockFFI.xcframework`.
+/// Regenerate the Swift bindings and assemble `BregaFFI.xcframework`.
 ///
 /// Pipeline (all paths relative to the workspace root):
 /// 1. `rustup target add` the four Apple targets (idempotent).
 /// 2. `cargo build --profile apple-ffi` the FFI crate for each Apple target.
 /// 3. Run `uniffi-bindgen` against the macOS dylib to emit Swift + header
-///    + modulemap, copying the Swift into `bindings/swift/Sources/TockFFI/`.
+///    + modulemap, copying the Swift into `bindings/swift/Sources/BregaFFI/`.
 /// 4. `lipo` the two macOS static libs into one universal slice.
 /// 5. `xcodebuild -create-xcframework` over the macOS, iOS-device, and
 ///    iOS-simulator slices, sharing one headers directory.
@@ -161,13 +161,13 @@ fn generate_bindings(root: &Path, scratch: &Path) -> Result<PathBuf, String> {
     Ok(gen_dir)
 }
 
-/// Copy the generated Swift source into the SPM `TockFFI` target.
+/// Copy the generated Swift source into the SPM `BregaFFI` target.
 fn install_swift_source(root: &Path, gen_dir: &Path) -> Result<(), String> {
     let swift_dst = root
         .join("bindings")
         .join("swift")
         .join("Sources")
-        .join("TockFFI")
+        .join("BregaFFI")
         .join(format!("{FFI_LIB_STEM}.swift"));
     copy_file(&gen_dir.join(format!("{FFI_LIB_STEM}.swift")), &swift_dst)?;
     println!("    wrote {}", swift_dst.display());
@@ -211,11 +211,11 @@ fn lipo_macos(root: &Path, scratch: &Path) -> Result<PathBuf, String> {
 
 /// Run `xcodebuild -create-xcframework` over all three slices.
 fn create_xcframework(root: &Path, headers: &Path, macos_lib: &Path) -> Result<(), String> {
-    println!("==> Creating TockFFI.xcframework");
+    println!("==> Creating BregaFFI.xcframework");
     let xcframework = root
         .join("bindings")
         .join("swift")
-        .join("TockFFI.xcframework");
+        .join("BregaFFI.xcframework");
     if xcframework.exists() {
         std::fs::remove_dir_all(&xcframework)
             .map_err(|e| format!("remove {}: {e}", xcframework.display()))?;
@@ -230,7 +230,7 @@ fn create_xcframework(root: &Path, headers: &Path, macos_lib: &Path) -> Result<(
     xcb.arg("-output").arg(&xcframework);
     run(&mut xcb, "xcodebuild -create-xcframework")?;
 
-    println!("✔ TockFFI.xcframework ready at {}", xcframework.display());
+    println!("✔ BregaFFI.xcframework ready at {}", xcframework.display());
     Ok(())
 }
 

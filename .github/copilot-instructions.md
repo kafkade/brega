@@ -1,8 +1,14 @@
-# Copilot Instructions for tock
+# Copilot Instructions for brega
+
+## Current direction (read first)
+
+The first release is an **iPhone + Mac SwiftUI app over the Rust core**, named **brega** (formerly tock; on-disk and crypto labels still say `tock` until the vault v3 work in #233), syncing through iCloud (CloudKit). Release scope and requirement IDs (R-xx, N-xx): `docs/release-v1.md`. Later plans: `docs/roadmap.md`. Rationale: `docs/adr/ADR-021-iphone-mac-first-product-direction.md`. The CLI, `brega-server`, web console, SRP accounts, and CalDAV are **dormant**: keep them compiling, but do not extend them unless asked. The "Implementation Status" section below describes the CLI era and is partly stale.
+
+Schema changes are additive numbered migrations in `crates/brega-storage/src/migrations/`; never edit an applied migration (checksummed). Ask before changing the vault header format (ADR-013).
 
 ## Project Overview
 
-tock is a unified personal productivity engine that fuses four traditionally separate tools — task management, habit tracking, time tracking, and a focus (Pomodoro) timer — into a single end-to-end encrypted, local-first system. It targets power productivity practitioners: developers, researchers, founders, and knowledge workers who have outgrown single-purpose apps.
+brega is a unified personal productivity engine that fuses four traditionally separate tools — task management, habit tracking, time tracking, and a focus (Pomodoro) timer — into a single end-to-end encrypted, local-first system. It targets power productivity practitioners: developers, researchers, founders, and knowledge workers who have outgrown single-purpose apps.
 
 **Stack**: Rust core library + CLI (clap/ratatui TUI) + iOS/iPadOS/macOS/watchOS (SwiftUI via UniFFI) + Web (WASM via wasm-bindgen) + optional sync server (Axum, AGPL-3.0).
 
@@ -10,23 +16,23 @@ tock is a unified personal productivity engine that fuses four traditionally sep
 
 ### Monorepo Layout
 
-- `crates/tock-core/` — Shared Rust library: domain model (tasks, habits, time blocks, focus sessions), query language, urgency scoring, recurrence, conflict resolution. **No I/O, no networking** — pure computation only.
-- `crates/tock-crypto/` — Envelope encryption (AES-256-GCM), Argon2id KDF, key hierarchy, recovery keys. No I/O — pure crypto.
-- `crates/tock-parse/` — Query language parser and filter engine.
-- `crates/tock-storage/` — SQLite storage implementation (rusqlite). Implements storage traits from tock-core.
-- `crates/tock-sync/` — Sync protocol: event-sourced, batch-encrypted, conflict resolution with user review.
-- `crates/tock-import/` — Import from Todoist, Things 3, Toggl, hledger timeclock, CSV.
-- `crates/tock-export/` — Export to JSON, CSV, hledger timeclock, iCal.
-- `crates/tock-cli/` — CLI binary (clap commands + ratatui TUI). Only place in Rust that does HTTP (via reqwest).
-- `crates/tock-server/` — Sync server (Axum). **AGPL-3.0 licensed** (has its own LICENSE file). Encrypted blob store — never decrypts user data.
-- `crates/tock-uniffi/` — UniFFI facade for Apple platforms.
+- `crates/brega-core/` — Shared Rust library: domain model (tasks, habits, time blocks, focus sessions), query language, urgency scoring, recurrence, conflict resolution. **No I/O, no networking** — pure computation only.
+- `crates/brega-crypto/` — Envelope encryption (AES-256-GCM), Argon2id KDF, key hierarchy, recovery keys. No I/O — pure crypto.
+- `crates/brega-parse/` — Query language parser and filter engine.
+- `crates/brega-storage/` — SQLite storage implementation (rusqlite). Implements storage traits from brega-core.
+- `crates/brega-sync/` — Sync protocol: event-sourced, batch-encrypted, conflict resolution with user review.
+- `crates/brega-import/` — Import from Todoist, Things 3, Toggl, hledger timeclock, CSV.
+- `crates/brega-export/` — Export to JSON, CSV, hledger timeclock, iCal.
+- `crates/brega-cli/` — CLI binary (clap commands + ratatui TUI). Only place in Rust that does HTTP (via reqwest).
+- `crates/brega-server/` — Sync server (Axum). **AGPL-3.0 licensed** (has its own LICENSE file). Encrypted blob store — never decrypts user data.
+- `crates/brega-uniffi/` — UniFFI facade for Apple platforms.
 - `bindings/swift/` — UniFFI-generated Swift bindings + idiomatic async/await wrapper layer.
 - `apps/ios/` — SwiftUI app consuming the Swift bindings.
-- `apps/web/` — Web app consuming tock-core via WASM.
+- `apps/web/` — Web app consuming brega-core via WASM.
 
 ### Key Design Constraints
 
-1. **tock-core must have zero I/O dependencies.** No `reqwest`, no file system access, no platform APIs. All I/O happens in platform-specific code. This keeps the core testable (pure functions) and compilable to WASM.
+1. **brega-core must have zero I/O dependencies.** No `reqwest`, no file system access, no platform APIs. All I/O happens in platform-specific code. This keeps the core testable (pure functions) and compilable to WASM.
 
 2. **Four unified domains.** Tasks, habits, time tracking, and focus sessions share IDs, events, and cross-domain primitives. A Pomodoro session linked to a task automatically logs a time block and increments a "deep work" habit. Use the unified query language across all four domains.
 
@@ -53,7 +59,7 @@ Password → Argon2id → MK → HKDF → MEK → wraps VK → wraps per-item IK
 
 - Crypto failures must never expose key material in error messages
 - Use `thiserror` for library errors in core crates
-- Use `anyhow` only in binary crates (`tock-cli`, `tock-server`)
+- Use `anyhow` only in binary crates (`brega-cli`, `brega-server`)
 - Wrap errors with context (`anyhow::Context`)
 
 ### WASM Bundle Budget
@@ -65,11 +71,11 @@ The `core` WASM feature must stay under **2 MB compressed**. Feature flags in Ca
 
 ### UniFFI / Swift
 
-UniFFI generates callback-based APIs. The `bindings/swift/Sources/TockSwift/` wrapper layer converts these to idiomatic Swift async/await using `withCheckedThrowingContinuation`.
+UniFFI generates callback-based APIs. The `bindings/swift/Sources/BregaSwift/` wrapper layer converts these to idiomatic Swift async/await using `withCheckedThrowingContinuation`.
 
 ### Licensing
 
-Everything is Apache-2.0 except `crates/tock-server/` which is AGPL-3.0. Don't move server code into tock-core or vice versa without considering license implications.
+Everything is Apache-2.0 except `crates/brega-server/` which is AGPL-3.0. Don't move server code into brega-core or vice versa without considering license implications.
 
 ## Build & Test
 
@@ -81,13 +87,13 @@ cargo build --workspace
 cargo test --workspace
 
 # Run tests for a specific crate
-cargo test -p tock-core
+cargo test -p brega-core
 
 # Run a single test by name
-cargo test -p tock-core test_name
+cargo test -p brega-core test_name
 
 # Run tests for a specific module
-cargo test -p tock-core tasks::
+cargo test -p brega-core tasks::
 
 # Clippy lints
 cargo clippy --workspace --all-targets -- -D warnings
@@ -96,11 +102,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 
 # Build WASM (requires wasm-pack)
-wasm-pack build crates/tock-core --target web --features core
+wasm-pack build crates/brega-core --target web --features core
 
 # Check WASM bundle size
-wasm-pack build crates/tock-core --target web --features core --release
-gzip -c crates/tock-core/pkg/tock_core_bg.wasm | wc -c
+wasm-pack build crates/brega-core --target web --features core --release
+gzip -c crates/brega-core/pkg/brega_core_bg.wasm | wc -c
 ```
 
 ## ADRs
@@ -135,7 +141,7 @@ Architecture Decision Records live in `docs/adr/`. Read them before making chang
 
 ## CI / Infrastructure Dependency
 
-**Branch protection for this repo is managed via Terraform in `kafkade/github-infra` (`repo_tock.tf`).** The `required_status_checks` list must match the job names in `.github/workflows/ci.yml`. If you rename, add, or remove CI jobs that are used as merge gates, the corresponding IaC config must be updated or PRs will be permanently blocked. Always flag this when proposing workflow changes.
+**Branch protection for this repo is managed via Terraform in `kafkade/github-infra` (`repos/brega/main.tf`).** The `required_status_checks` list must match the job names in `.github/workflows/ci.yml`. If you rename, add, or remove CI jobs that are used as merge gates, the corresponding IaC config must be updated or PRs will be permanently blocked. Always flag this when proposing workflow changes.
 
 ## PR Title Format
 
@@ -145,7 +151,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 
 Releases follow a **two-phase, PR-based flow** driven by a machine-global, repo-agnostic helper (`rust-release.sh`, aliased to `release` — not tracked in-repo). Agents must respect the Git Policy above: perform the **prepare** file edits, but never commit, tag, or push.
 
-- **Phase 1 — prepare (in a feature branch / release PR).** `release prepare <major|minor|patch>` bumps `[workspace.package] version` and every internal `tock-*` path-dep version in `[workspace.dependencies]`, refreshes `Cargo.lock`, and stamps `CHANGELOG.md` (`[Unreleased] → [x.y.z] - <date>`, plus compare links if the changelog uses them). It does **not** commit, tag, or push — the resulting diff *is* the release PR. An agent may reproduce these edits by hand (equivalent to the script) and leave them uncommitted for review. The phase is idempotent: re-running when already prepared is a no-op.
+- **Phase 1 — prepare (in a feature branch / release PR).** `release prepare <major|minor|patch>` bumps `[workspace.package] version` and every internal `brega-*` path-dep version in `[workspace.dependencies]`, refreshes `Cargo.lock`, and stamps `CHANGELOG.md` (`[Unreleased] → [x.y.z] - <date>`, plus compare links if the changelog uses them). It does **not** commit, tag, or push — the resulting diff *is* the release PR. An agent may reproduce these edits by hand (equivalent to the script) and leave them uncommitted for review. The phase is idempotent: re-running when already prepared is a no-op.
 - **Phase 2 — tag (on the default branch, after the PR merges).** `release tag [--push]` verifies the version is already stamped, then creates the annotated `vX.Y.Z` tag at the merge commit and (with `--push`) pushes it. **Pushing the tag is the only trigger** for `.github/workflows/release.yml` (multi-target build + WASM gate). This is a human/maintainer step — agents never tag or push.
 
 Conventions:
@@ -166,7 +172,7 @@ Conventions:
 - Append-only event log with per-entity AEAD + device registry
 - SQLite storage with 9 migrations, tracing with vault-data redaction
 
-**Task management (tock-core + tock-storage + tock-cli):**
+**Task management (brega-core + brega-storage + brega-cli):**
 
 - Full CRUD: add (with sigils #tag !H/M/L due:date), modify, done, cancel, delete
 - Projects, areas, headings, tags with SID allocation
@@ -174,43 +180,43 @@ Conventions:
 - Filter DSL: status, tag, priority, project, virtual tags (+TODAY, +OVERDUE, +EVENING, +BLOCKED, +BLOCKING), NOT, AND
 - Six built-in views: inbox, today, upcoming, anytime, someday, logbook
 - Output formatters: --format table|compact|json, shell completions
-- JSON import/export (tock-import, tock-export)
+- JSON import/export (brega-import, brega-export)
 - User-defined attributes (UDAs): typed definitions, uda.key:value in modify + filter
-- Urgency scoring engine: configurable coefficients, blocked factor, tock urgency breakdown
-- Hook scripts API: on-add, on-complete at ~/.config/tock/hooks/
-- Custom report definitions: tock report define/show/ls/rm
-- Task dependencies: tock depend/undepend, circular detection, +BLOCKED/+BLOCKING filters
+- Urgency scoring engine: configurable coefficients, blocked factor, brega urgency breakdown
+- Hook scripts API: on-add, on-complete at ~/.config/brega/hooks/
+- Custom report definitions: brega report define/show/ls/rm
+- Task dependencies: brega depend/undepend, circular detection, +BLOCKED/+BLOCKING filters
 - Recurring tasks: --recur daily|weekly|monthly|yearly|every-Nd|every-Nw, auto-creates next instance
-- Named contexts: tock context define/set/clear/ls/rm, auto-applied to listings
-- Checklist items: tock checklist add/ls/check/uncheck/rm/reorder, done/total progress in list/show/TUI, JSON round-trip
+- Named contexts: brega context define/set/clear/ls/rm, auto-applied to listings
+- Checklist items: brega checklist add/ls/check/uncheck/rm/reorder, done/total progress in list/show/TUI, JSON round-trip
 - Interactive ratatui TUI: 3-pane (sidebar, task list, detail), vim keys
 
 **Time tracking:**
 
-- TimeBlock domain, time_block_repo, tock time start/stop/resume/current/blocks/report/edit
+- TimeBlock domain, time_block_repo, brega time start/stop/resume/current/blocks/report/edit
 - On-the-fly task creation, period-based reporting (today/week/month)
 
 **Focus timer (Pomodoro):**
 
 - FocusSession domain with state machine, focus_repo
-- tock focus start/done/skip-break/pause/resume/stop/status/stats
+- brega focus start/done/skip-break/pause/resume/stop/status/stats
 - Completed cycles auto-log as time blocks, per-task focus history
-- tock done auto-stops linked focus sessions + timers
+- brega done auto-stops linked focus sessions + timers
 
 **Habit tracking:**
 
 - Habit domain with identity statements, stacking, cadences, Fibonacci leveling
 - Streak tracking with skip/freeze grace days, backfill logging
 - Break-bad-habit mode with inverted scoring, "days clean" display
-- Per-habit reminders (tock habit remind --at/--days/--list/--clear)
+- Per-habit reminders (brega habit remind --at/--days/--list/--clear)
 
 **Account onboarding (#129):**
 
-- `tock-account` zero-I/O crate: signup material (Secret Key, 2SKD, SRP verifier), SRP login state machine, Emergency Kit + Setup Code codec
-- CLI `tock account signup/login/logout/status`, OS keyring creds, authed sync (Bearer + channel binding)
+- `brega-account` zero-I/O crate: signup material (Secret Key, 2SKD, SRP verifier), SRP login state machine, Emergency Kit + Setup Code codec
+- CLI `brega account signup/login/logout/status`, OS keyring creds, authed sync (Bearer + channel binding)
 - Server vault-header bootstrap (`PUT`/`GET /v1/vaults/:id/header`); `srp/start` returns kdf_params
 - UniFFI account API + Apple Keychain creds + channel-bound sync
-- `tock-wasm` web binding + React/Vite web app (`apps/web`): signup → kit/code → login → authed sync
+- `brega-wasm` web binding + React/Vite web app (`apps/web`): signup → kit/code → login → authed sync
 
 ### What's NOT yet implemented (for v1.0)
 
@@ -223,31 +229,31 @@ Conventions:
 - **Web app** — onboarding (signup/login/authed sync) shipped; task UI is auth-smoke only (no browser vault)
 - **Annotations** — append-only log per task
 - **Scheduled tasks** — calendar slot scheduling (scheduled_for field exists in schema but unused)
-- **Config file** — ~/.config/tock/config.toml for urgency weights, UDA declarations
+- **Config file** — ~/.config/brega/config.toml for urgency weights, UDA declarations
 - **SQLCipher** — currently using app-layer AEAD; full-disk encryption planned
 
 ### Key files by area
 
-**Domain model (tock-core/src/domain/):**
+**Domain model (brega-core/src/domain/):**
 
 - task.rs, project.rs, area.rs, heading.rs, tag.rs, sid.rs, checklist.rs
 - time_block.rs, focus.rs, habit.rs, cadence.rs
 - uda.rs, urgency.rs, recurrence.rs, report.rs
 
-**Storage (tock-storage/src/):**
+**Storage (brega-storage/src/):**
 
 - vault.rs (OpenVault lifecycle), event_log.rs, migrations.rs (9 migrations)
 - repo/: task_repo, project_repo, area_repo, heading_repo, tag_repo, sid_repo, checklist_repo
 - repo/: time_block_repo, focus_repo, habit_repo, uda_repo, report_repo, context_repo
 
-**CLI (tock-cli/src/):**
+**CLI (brega-cli/src/):**
 
 - main.rs (~1600+ lines, all command handlers)
 - commands/: add, modify, done, list, show, project, tag, time, focus, habit, views, report, uda, hooks_cmd, context, checklist
 - tui/: mod (event loop + terminal cleanup), state (AppState, pane navigation, task CRUD), ui (3-pane rendering)
 - tracing_setup.rs, hooks.rs, display.rs, notify.rs
 
-**Crypto (tock-crypto/src/):**
+**Crypto (brega-crypto/src/):**
 
 - aead.rs, kdf.rs, keyexchange.rs, signature.rs, secret.rs, random.rs
 
@@ -260,17 +266,17 @@ Conventions:
 
 ### Test counts
 
-- tock-cli: 15 tests (commands, display, tracing, TUI state)
-- tock-core: 52 tests (domain types, vault, events, urgency, recurrence)
-- tock-crypto: 43 tests (AEAD, KDF, key exchange, signatures, proptests)
-- tock-parse: 37 tests (date parser, filter engine)
-- tock-storage: 23 tests (vault lifecycle, repos, migrations)
+- brega-cli: 15 tests (commands, display, tracing, TUI state)
+- brega-core: 52 tests (domain types, vault, events, urgency, recurrence)
+- brega-crypto: 43 tests (AEAD, KDF, key exchange, signatures, proptests)
+- brega-parse: 37 tests (date parser, filter engine)
+- brega-storage: 23 tests (vault lifecycle, repos, migrations)
 - Total: 172 tests across workspace
 
 ### Known gotchas
 
 - `workspace.dependencies` path deps need explicit `version = "X.Y.Z"` for cargo-deny; the release helper bumps these
-- `getrandom` needs `features = ["js"]` on wasm32-unknown-unknown for tock-crypto
+- `getrandom` needs `features = ["js"]` on wasm32-unknown-unknown for brega-crypto
 - `paste` crate (transitive via ratatui) has RUSTSEC-2024-0436 (unmaintained) — ignored in deny.toml
 - `time` crate 0.3.47+ requires rustc 1.88+
 - Release workflow uses `--notes-file` not `--notes` to avoid bash interpretation of CHANGELOG content

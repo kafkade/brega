@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed tock → brega** (#226): crates (`brega-*`), binaries (`brega`, `brega-server`), environment variables (`BREGA_*`), config directory, vault/backup file extensions (`.bregavault`, `.bregabak`), Swift modules (`BregaFFI`, `BregaSwift`), and docs. On-disk and cryptographic labels (HKDF/AAD strings, backup magic, `TOCK1:` setup codes, server database filenames) are unchanged until vault format v3 (#233), so existing vaults keep opening.
+- **Product direction re-baselined** (2026-11-26): the first release becomes an
+  iPhone + Mac app renamed **brega**, with iCloud sync; the CLI, self-hosted
+  server, and web console are dormant. See [docs/release-v1.md](docs/release-v1.md),
+  [docs/roadmap.md](docs/roadmap.md), and
+  [ADR-021](docs/adr/ADR-021-iphone-mac-first-product-direction.md). Proposed
+  [ADR-020](docs/adr/ADR-020-external-calendar-busy-time.md) covers read-only
+  busy/free calendar reads.
+
+### Security
+
+- Upgrade bundled SQLite and URL parsing dependencies to address
+  RUSTSEC-2026-0459 and RUSTSEC-2026-0592.
+- **Corrected the at-rest encryption documentation**: SECURITY.md and ADR-014
+  claimed task and habit contents were encrypted at rest. Only event-log payloads
+  and device keys are; the domain tables are plaintext in the vault file. The
+  first release fixes this with SQLCipher.
+
 ### Added
 
 - **`tock account export` and `tock account import`** (#202): one-command

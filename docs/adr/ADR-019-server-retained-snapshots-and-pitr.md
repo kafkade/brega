@@ -6,10 +6,10 @@
 > **Security-sensitive.** This ADR covers a *new* server surface that turns the
 > relayed ciphertext into a downloadable artifact and closes an insecure direct
 > object reference (IDOR) in export
-> ([#201](https://github.com/kafkade/tock/issues/201), R7). It feeds the pre-1.0
+> ([#201](https://github.com/kafkade/brega/issues/201), R7). It feeds the pre-1.0
 > audit ([ADR-015](ADR-015-pre-1.0-security-audit-status.md),
-> [#203](https://github.com/kafkade/tock/issues/203)) and unblocks cross-server
-> migration ([#202](https://github.com/kafkade/tock/issues/202)). The server
+> [#203](https://github.com/kafkade/brega/issues/203)) and unblocks cross-server
+> migration ([#202](https://github.com/kafkade/brega/issues/202)). The server
 > remains an encrypted blob store per
 > [ADR-002](ADR-002-end-to-end-encryption.md) and
 > [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md): it **never
@@ -18,7 +18,7 @@
 
 ## Context
 
-The self-hosted sync server (`crates/tock-server`, AGPL-3.0 per
+The self-hosted sync server (`crates/brega-server`, AGPL-3.0 per
 [ADR-006](ADR-006-licensing-dual-license.md)) is a per-account, event-sourced
 ciphertext relay ([ADR-003](ADR-003-event-sourced-sync.md)). Before #201 it had
 three gaps that were easy to conflate but are genuinely different problems:
@@ -36,7 +36,7 @@ three gaps that were easy to conflate but are genuinely different problems:
    channel-binding tag.
 3. **No durability if the DB is lost before download.** A download endpoint is
    *portability*, not a *backup*: it does nothing if the server's SQLite database
-   is destroyed before anyone downloads. `crates/tock-server/src/billing.rs`
+   is destroyed before anyone downloads. `crates/brega-server/src/billing.rs`
    modelled only tier limits (storage/device/rate) — there was no server-side
    retention of any kind. (Note: the per-tier "history retention" in
    [ADR-007](ADR-007-monetization-open-core.md) is a *billing* horizon for how
@@ -51,7 +51,7 @@ Keeping these three distinct — in code and in docs — is the core requirement
 
 | Capability | Mechanism | Actor | Protects against DB loss? |
 | --- | --- | --- | --- |
-| **Export** (portability) | `GET /v1/vaults/:id/export` + offline `tock-server admin export` | Account owner / operator | No — it is a download, not a backup |
+| **Export** (portability) | `GET /v1/vaults/:id/export` + offline `brega-server admin export` | Account owner / operator | No — it is a download, not a backup |
 | **Import** (restore / round-trip) | `POST /v1/vaults/:id/import` | Account owner | N/A — the inverse of export |
 | **Server-retained snapshots** | Scheduled `VACUUM INTO` + keep-*N* prune | Operator (automatic) | **Yes** — the point of the feature |
 
@@ -70,7 +70,7 @@ db.require_vault_access(&vault_bytes, &account_id)?;   // proven ownership
 ```
 
 The archive shape is shared verbatim between the HTTP route and the offline
-`tock-server admin export [--all | --account <id>]` admin command (both build the
+`brega-server admin export [--all | --account <id>]` admin command (both build the
 same `VaultArchive { vault_id, header, events[] }`), so #202 migration tooling can
 consume either source. True chunked/streaming transfer is **deferred**: a single
 JSON body is adequate for personal-scale vaults and keeps the round-trip trivial
@@ -102,7 +102,7 @@ issue's literal `require_vault_access` wording. Rationale:
 
 ### 4. Server-retained snapshots (scheduled, keep-*N*)
 
-A background task (`crates/tock-server/src/retention.rs`), spawned from the
+A background task (`crates/brega-server/src/retention.rs`), spawned from the
 `main.rs` binary **only** (never from `serve`, so integration tests never write
 snapshots), periodically produces a consistent, ciphertext-only copy of the whole
 database with SQLite's online `VACUUM INTO` to a timestamped file
@@ -115,11 +115,11 @@ default**:
 
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
-| `--snapshot-interval-secs` | `TOCK_SNAPSHOT_INTERVAL_SECS` | `86400` (daily) | Seconds between snapshots; `0` disables |
-| `--snapshot-dir` | `TOCK_SNAPSHOT_DIR` | `<data_dir>/snapshots` | Snapshot output directory |
-| `--snapshot-keep` | `TOCK_SNAPSHOT_KEEP` | `7` | Newest *N* snapshots kept; older pruned |
+| `--snapshot-interval-secs` | `BREGA_SNAPSHOT_INTERVAL_SECS` | `86400` (daily) | Seconds between snapshots; `0` disables |
+| `--snapshot-dir` | `BREGA_SNAPSHOT_DIR` | `<data_dir>/snapshots` | Snapshot output directory |
+| `--snapshot-keep` | `BREGA_SNAPSHOT_KEEP` | `7` | Newest *N* snapshots kept; older pruned |
 
-`tock-server admin snapshot` forces one offline. This is the capability that makes
+`brega-server admin snapshot` forces one offline. This is the capability that makes
 data survive DB loss *before* a user downloads an export; the manual volume `tar`
 in `docs/self-hosting.md` remains as an out-of-band complement.
 
@@ -143,13 +143,13 @@ keep-newest-*N* policy.
 
 ### 6. Client-side CLI deferred to #202
 
-Client-facing `tock account export` / `tock account import` wrappers (a user
+Client-facing `brega account export` / `brega account import` wrappers (a user
 typing one command to round-trip through a server) are **deferred to
-[#202](https://github.com/kafkade/tock/issues/202)**. #201's acceptance criteria
+[#202](https://github.com/kafkade/brega/issues/202)**. #201's acceptance criteria
 are met at the endpoint + admin-CLI + round-trip-test level.
 
-**Update (#202, delivered):** those wrappers now ship as `tock account export
-[--out FILE]` and `tock account import FILE`, together with the cross-server
+**Update (#202, delivered):** those wrappers now ship as `brega account export
+[--out FILE]` and `brega account import FILE`, together with the cross-server
 migration guide in [docs/migration.md](../migration.md); `import` targets the
 vault's bound server only (no `--server` override) so it cannot make a second
 server claim the same `vault_id`, and it uploads the vault's *current* local

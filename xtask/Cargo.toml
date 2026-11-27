@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Internal build orchestration tasks for the tock workspace. Not published."
+description = "Internal build orchestration tasks for the brega workspace. Not published."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

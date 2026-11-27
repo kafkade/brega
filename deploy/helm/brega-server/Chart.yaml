@@ -1,0 +1,16 @@
+apiVersion: v2
+name: brega-server
+description: Self-hosted sync server for brega (AGPL-3.0)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/kafkade/brega
+sources:
+  - https://github.com/kafkade/brega
+maintainers:
+  - name: The brega authors
+keywords:
+  - brega
+  - sync
+  - productivity
+  - e2ee

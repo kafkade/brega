@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock the wasm module: the self-service client only needs rotate_password and
 // build_setup_code, plus the default init export.
-vi.mock("tock-wasm", () => ({
+vi.mock("brega-wasm", () => ({
   default: () => Promise.resolve({}),
   rotate_password: (
     _old: string,
@@ -55,7 +55,7 @@ describe("self-service client", () => {
     const [, init] = f.mock.calls[0];
     // Avoid asserting the exact scheme string; check the token is carried.
     expect(String(init.headers.Authorization)).toContain("sess_tok");
-    expect(init.headers["X-Tock-Channel-Binding"]).toBe("cb_1");
+    expect(init.headers["X-Brega-Channel-Binding"]).toBe("cb_1");
   });
 
   it("fetchAccountHeader returns the base64 header", async () => {

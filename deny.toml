@@ -1,4 +1,4 @@
-# cargo-deny configuration for tock.
+# cargo-deny configuration for brega.
 #
 # Run locally:    cargo deny check
 # In CI:          .github/workflows/ci.yml `deny` job.
@@ -32,7 +32,7 @@ ignore = [
     "RUSTSEC-2026-0173",
     # lopdf stack overflow on deeply-nested PDF *input* (parsing). Pulled in
     # transitively by `printpdf` solely to *generate* the Emergency Kit PDF —
-    # tock never parses untrusted (or any) PDFs, so the parser path is
+    # brega never parses untrusted (or any) PDFs, so the parser path is
     # unreachable. The fix lands in lopdf >= 0.42, which only newer printpdf
     # majors use — and those drag a much larger (azul/allsorts) tree that still
     # pins lopdf < 0.42, so a bump resolves nothing. Revisit when printpdf
@@ -41,13 +41,13 @@ ignore = [
     # ttf-parser is unmaintained (no known vulnerability). It is a transitive,
     # build-and-generate-only dependency of `printpdf` (via owned_ttf_parser),
     # used to embed builtin-font metrics when *writing* the Emergency Kit PDF.
-    # tock never parses untrusted font/PDF input. No slim maintained printpdf
+    # brega never parses untrusted font/PDF input. No slim maintained printpdf
     # tree avoids it today (0.9 still depends on ttf-parser).
     "RUSTSEC-2026-0192",
     # The following four crates are unmaintained (no known vulnerabilities) and
     # are all transitive, build-and-generate-only dependencies of `printpdf`
     # (via the azul/allsorts layout tree), pulled in solely to *write* the
-    # Emergency Kit PDF. tock never parses untrusted input through them, and no
+    # Emergency Kit PDF. brega never parses untrusted input through them, and no
     # slim maintained printpdf tree avoids them today.
     #
     # bincode 1.x via hyphenation -> azul-layout -> printpdf.
@@ -79,7 +79,7 @@ allow = [
     # `webpki-roots`, pulled in transitively by `reqwest` (rustls TLS) for
     # the CLI's HTTP sync transport. It is a permissive data license.
     "CDLA-Permissive-2.0",
-    # AGPL-3.0-only applies to tock-server itself. The license MUST be
+    # AGPL-3.0-only applies to brega-server itself. The license MUST be
     # the explicit SPDX identifier (cargo-deny ≥ 0.19 rejects the bare
     # `AGPL-3.0` form for GNU-family licenses).
     "AGPL-3.0-only",

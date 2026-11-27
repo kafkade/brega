@@ -1,0 +1,40 @@
+[package]
+name = "brega-storage"
+description = "SQLite storage adapter for brega (rusqlite, app-layer AEAD encryption)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[features]
+# Phase 0 uses plain `rusqlite-bundled` (no SQLCipher). Sensitive data
+# is encrypted at the application layer via brega-crypto AEAD; the
+# `storage_layout` field in the vault header records this dev-only
+# format so a future SQLCipher migration can detect and upgrade it.
+default = ["sqlite-bundled"]
+sqlite-bundled = []
+
+[lints]
+workspace = true
+
+[dependencies]
+brega-core = { workspace = true }
+brega-crypto = { workspace = true }
+brega-sync = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }

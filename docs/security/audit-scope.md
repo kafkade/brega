@@ -1,24 +1,24 @@
-# tock — External Security & Cryptography Audit Scope
+# brega — External Security & Cryptography Audit Scope
 
 **Status:** Pre-engagement scoping brief (living document)
-**Owner:** tock maintainers
+**Owner:** brega maintainers
 **Related:** [ADR-015](../adr/ADR-015-pre-1.0-security-audit-status.md) ·
-[SECURITY.md](../../SECURITY.md) · [Issue #173](https://github.com/kafkade/tock/issues/173)
+[SECURITY.md](../../SECURITY.md) · [Issue #173](https://github.com/kafkade/brega/issues/173)
 
-This document scopes an independent external review of tock's cryptographic
+This document scopes an independent external review of brega's cryptographic
 protocol and its implementation. It exists so that "commission an audit" is a
 hand-off, not an open research task: the surfaces below, the pointers, and the
 findings process are ready for a prospective auditor (a firm or a qualified
 community reviewer) to price and execute.
 
-As of 1.0, tock is **unaudited (pre-audit)** — see
+As of 1.0, brega is **unaudited (pre-audit)** — see
 [ADR-015](../adr/ADR-015-pre-1.0-security-audit-status.md). Only the underlying
-RustCrypto primitives have had independent review; tock's own composition of them
+RustCrypto primitives have had independent review; brega's own composition of them
 has not.
 
 ## Objectives
 
-Assess whether tock delivers the guarantees it markets:
+Assess whether brega delivers the guarantees it markets:
 
 1. **End-to-end confidentiality** — the sync server and any network observer see
    only opaque ciphertext plus low-sensitivity metadata; never plaintext.
@@ -93,7 +93,7 @@ Assess whether tock delivers the guarantees it markets:
 
 ### 5. Server zero-knowledge claims
 
-- Confirm the server (`crates/tock-server`, Axum) never has access to plaintext
+- Confirm the server (`crates/brega-server`, Axum) never has access to plaintext
   or key material: blob storage, vault-header bootstrap
   (`PUT`/`GET /v1/vaults/:id/header`), `srp/start` returning `kdf_params`.
 - Authentication and authorization boundaries; multi-user self-host
@@ -119,11 +119,11 @@ Assess whether tock delivers the guarantees it markets:
 
 | Area | Where |
 |------|-------|
-| Crypto primitives & key types | `crates/tock-crypto/` (`aead.rs`, `kdf.rs`, `keyexchange.rs`, `signature.rs`, `secret.rs`, `random.rs`) |
-| Account material, SRP state machine, 2SKD | `crates/tock-account/` |
-| Vault lifecycle, event log, wrapping | `crates/tock-storage/` (`vault.rs`, `event_log.rs`), `crates/tock-core/src/vault/` |
-| Sync protocol foundation | `crates/tock-sync/` |
-| Server (zero-knowledge blob store) | `crates/tock-server/` |
+| Crypto primitives & key types | `crates/brega-crypto/` (`aead.rs`, `kdf.rs`, `keyexchange.rs`, `signature.rs`, `secret.rs`, `random.rs`) |
+| Account material, SRP state machine, 2SKD | `crates/brega-account/` |
+| Vault lifecycle, event log, wrapping | `crates/brega-storage/` (`vault.rs`, `event_log.rs`), `crates/brega-core/src/vault/` |
+| Sync protocol foundation | `crates/brega-sync/` |
+| Server (zero-knowledge blob store) | `crates/brega-server/` |
 | Design rationale | `docs/adr/ADR-002, -003, -010, -011, -012, -013, -014, -015` |
 | Threat model | `docs/architecture.md` §5.5 |
 

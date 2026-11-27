@@ -2,10 +2,10 @@
 
 ## Audit status: unaudited (pre-audit)
 
-> **tock's own cryptographic protocol and implementation have not yet been
+> **brega's own cryptographic protocol and implementation have not yet been
 > independently audited.** As of 1.0, only the underlying
-> [RustCrypto](https://github.com/RustCrypto) *primitives* tock builds on have
-> had external review — tock's **composition** of them (key hierarchy, 2SKD,
+> [RustCrypto](https://github.com/RustCrypto) *primitives* brega builds on have
+> had external review — brega's **composition** of them (key hierarchy, 2SKD,
 > vault format & AEAD usage, the SRP-6a handshake and channel binding, the sync
 > protocol, and the server's zero-knowledge claims) has **not** been reviewed by
 > an external party.
@@ -17,12 +17,12 @@ primitives, so "built on audited crates" is **not** the same as "audited
 product." We are being explicit about that distinction so you can make an
 informed choice.
 
-**What this means for your threat model.** tock's marketed guarantees
+**What this means for your threat model.** brega's marketed guarantees
 (end-to-end encryption, zero-knowledge sync server, two-secret key derivation)
 are designed in good faith and documented in the ADRs and the
 [threat model](docs/architecture.md#55-threat-model), but they have not been
 independently verified. If your use case requires an externally attested
-cryptographic guarantee, treat tock as **pre-audit** and weigh that accordingly.
+cryptographic guarantee, treat brega as **pre-audit** and weigh that accordingly.
 
 **Our commitment.** We have scoped an external crypto/security review — the full
 surface list, artifacts, and findings process are published in the
@@ -46,10 +46,10 @@ Only the latest release is supported with security updates.
 
 **Please do not open a public issue for security vulnerabilities.**
 
-If you discover a security vulnerability in tock, please report it through
+If you discover a security vulnerability in brega, please report it through
 GitHub's private vulnerability reporting feature:
 
-1. Go to the [Security tab](https://github.com/kafkade/tock/security) of this repository
+1. Go to the [Security tab](https://github.com/kafkade/brega/security) of this repository
 2. Click **"Report a vulnerability"**
 3. Fill out the form with details about the vulnerability
 
@@ -69,7 +69,7 @@ GitHub's private vulnerability reporting feature:
 
 ### Scope
 
-Security issues in tock may include:
+Security issues in brega may include:
 
 - Cryptographic weaknesses in the vault format or key hierarchy
 - Key material exposure in error messages, logs, or Debug output
@@ -91,7 +91,7 @@ Security issues in tock may include:
 
 ## Cryptographic Details
 
-tock defines **no custom cryptographic primitives**. It uses audited
+brega defines **no custom cryptographic primitives**. It uses audited
 [RustCrypto](https://github.com/RustCrypto) crates exclusively:
 
 - **AES-256-GCM** for symmetric encryption (aes-gcm crate)
@@ -102,18 +102,18 @@ tock defines **no custom cryptographic primitives**. It uses audited
 
 All key types implement `Zeroize` and `ZeroizeOnDrop` for memory safety.
 
-> **Note:** These *primitives* are independently audited; tock's **protocol and
+> **Note:** These *primitives* are independently audited; brega's **protocol and
 > its composition of them are not yet** (see
 > [Audit status](#audit-status-unaudited-pre-audit) above). Using audited
 > building blocks does not by itself guarantee the assembly is correct.
 
 ## Encryption at Rest
 
-tock 1.0 protects data at rest with **application-layer AEAD**, not full-database
-(SQLCipher) encryption. This is the ratified 1.0 decision — see
-[ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md), which amends
-[ADR-004](docs/adr/ADR-004-sqlite-app-layer-encryption.md). The on-disk format is
-marked `storage_layout = "sqlite-plain-app-aead-v0"`.
+Current builds protect data at rest with **application-layer AEAD** only, not
+full-database (SQLCipher) encryption (see
+[ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md), now superseded
+by [ADR-021](docs/adr/ADR-021-iphone-mac-first-product-direction.md)). The on-disk
+format is marked `storage_layout = "sqlite-plain-app-aead-v0"`.
 
 The local vault is a **plain SQLite** file. Confidential data is encrypted with
 AES-256-GCM under a key derived from the Vault Key (VK) **before** it is written:
@@ -126,24 +126,24 @@ AES-256-GCM under a key derived from the Vault Key (VK) **before** it is written
   Key, Argon2id-hardened; see
   [ADR-011](docs/adr/ADR-011-account-based-self-host-two-secret-auth.md)).
 
-**What at-rest AEAD protects:** the contents of your tasks, habits, time blocks,
-focus sessions, and notes. A stolen `.db` file yields only ciphertext for these,
-and cannot reveal VK without the password **and** the Secret Key.
+**What at-rest AEAD protects today:** the event-log payloads (the copies of your
+data that sync) and the device signing keys. VK cannot be recovered from a stolen
+file without the password **and** the Secret Key.
 
-**What it does *not* protect (residual at-rest exposure):** because the database
-file is plain SQLite, a stolen file also exposes low-sensitivity **structure and
-metadata** — the schema and `PRAGMA user_version`, table/index layout, per-event
-timestamps and ordering, entity kinds and UUIDs, device IDs, and ciphertext sizes
-(mitigated by size-bucket padding). No plaintext payloads are exposed. For full
-at-rest file opacity today, run tock on top of OS full-disk encryption
-(FileVault, LUKS, or BitLocker).
+**What it does *not* protect — current builds:** the materialized domain tables
+that the app reads from are **plaintext**. A stolen vault file exposes task
+titles and notes, habit text, checklist items, time-block titles, and the undo
+log, in addition to structure and metadata (schema, timestamps, entity kinds and
+UUIDs, device IDs, ciphertext sizes). Until this is fixed, rely on OS full-disk
+encryption (FileVault, LUKS, or BitLocker) and do not store sensitive data in
+current builds.
 
-**SQLCipher (page-level, full-database encryption keyed by VK) is a planned
-post-1.0 enhancement**, tracked as a follow-up. When it lands it will reduce
-at-rest exposure to the fixed vault header, via an automatic in-place migration
-under [ADR-013](docs/adr/ADR-013-vault-format-versioning-policy.md).
+**Planned fix:** the first release encrypts the whole database with **SQLCipher**
+keyed by VK, plus OS file protection
+([ADR-021](docs/adr/ADR-021-iphone-mac-first-product-direction.md) D-14,
+[release-v1.md](docs/release-v1.md) N-02).
 
-Note that tock's protection against a **hostile sync host** does not depend on
+Note that brega's protection against a **hostile sync host** does not depend on
 at-rest storage encryption: sync events carry their own AEAD envelope, so the
 server only ever sees opaque ciphertext regardless of the local storage format.
 

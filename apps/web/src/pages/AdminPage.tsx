@@ -197,7 +197,7 @@ export function AdminPage({
           <input
             value={addressDraft}
             onChange={(e) => setAddressDraft(e.target.value)}
-            placeholder="https://tock.example.com"
+            placeholder="https://brega.example.com"
           />
         </label>
         <button type="submit" disabled={busy || addressDraft.trim() === address}>

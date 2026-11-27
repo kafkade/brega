@@ -1,0 +1,26 @@
+[package]
+name = "brega-sync"
+description = "Event-sourced synchronization layer for brega: log, conflict resolution, transport trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+brega-core = { workspace = true }
+brega-crypto = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

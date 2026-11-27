@@ -1,6 +1,6 @@
-# Distribution channels for tock
+# Distribution channels for brega
 
-This directory documents how `tock-cli` reaches end users. Foundation
+This directory documents how `brega-cli` reaches end users. Foundation
 phase: configuration is in place; not all channels are live yet.
 
 ## Channels
@@ -9,7 +9,7 @@ phase: configuration is in place; not all channels are live yet.
 |-----------------|------------------------------------------------------|---------------------------------------------------------------------------|
 | GitHub Releases | [`release.yml`](../../.github/workflows/release.yml) | **Live** — cargo-dist for Linux, macOS, Windows; shell + PS installers.   |
 | `cargo-dist`    | [`dist-workspace.toml`](../../dist-workspace.toml)   | **Active** — drives `release.yml` and validated in CI via `dist plan`.    |
-| Homebrew tap    | [`homebrew/tock.rb`](homebrew/tock.rb)               | **Wired** — `release.yml` publishes `Formula/tock.rb` per tag; needs the tap repo + `HOMEBREW_TAP_TOKEN` (below). |
+| Homebrew tap    | [`homebrew/brega.rb`](homebrew/brega.rb)               | **Wired** — `release.yml` publishes `Formula/brega.rb` per tag; needs the tap repo + `HOMEBREW_TAP_TOKEN` (below). |
 | Nix flake       | [`../../flake.nix`](../../flake.nix)                 | **Dev shell live**; packaging **deferred for 1.0** (decision below).      |
 | crates.io       | [`release.yml`](../../.github/workflows/release.yml) | **Deferred for 1.0** (decision below); manual `workflow_dispatch` path exists. |
 
@@ -40,7 +40,7 @@ To go live:
    reports `✅ Signed and notarized` and the notarization submission
    `Accepted`.
 4. No workflow **job** names change (only a step is added), so branch
-   protection in `kafkade/github-infra:repo_tock.tf`
+   protection in `kafkade/github-infra:repos/brega/main.tf`
    (`required_status_checks`) needs no update. Re-verify if that ever
    changes.
 
@@ -50,11 +50,11 @@ launch — so a downloaded binary installs without a Gatekeeper warning.
 
 ## Homebrew tap
 
-`brew install kafkade/tap/tock` is **wired end-to-end in-repo**: the `homebrew`
+`brew install kafkade/tap/brega` is **wired end-to-end in-repo**: the `homebrew`
 job in [`release.yml`](../../.github/workflows/release.yml) runs after the
 GitHub Release is created, reads the per-target `.sha256` files from the release
-artifacts, renders a populated `Formula/tock.rb` (the shape mirrors the template
-in [`homebrew/tock.rb`](homebrew/tock.rb)), and pushes it to the tap. It is
+artifacts, renders a populated `Formula/brega.rb` (the shape mirrors the template
+in [`homebrew/brega.rb`](homebrew/brega.rb)), and pushes it to the tap. It is
 **gated on the `HOMEBREW_TAP_TOKEN` secret**: until that secret exists the job
 emits a loud warning and skips, so releases keep working before the tap is
 provisioned.
@@ -69,16 +69,16 @@ logic. This mirrors how macOS signing is handled (see above).
 ### Remaining maintainer steps to go live
 
 1. Create the `kafkade/homebrew-tap` GitHub repo (public; the `homebrew` job
-   writes `Formula/tock.rb` to its default branch, `main`).
+   writes `Formula/brega.rb` to its default branch, `main`).
 2. Provision a token with `contents: write` on that repo (a fine-grained PAT or
-   a repo-scoped token) and add it to `kafkade/tock` as the
+   a repo-scoped token) and add it to `kafkade/brega` as the
    `HOMEBREW_TAP_TOKEN` Actions secret.
 3. Cut a tagged release. The `homebrew` job publishes the formula; afterwards
-   `brew install kafkade/tap/tock` resolves the just-built binaries.
+   `brew install kafkade/tap/brega` resolves the just-built binaries.
 4. No workflow **job** names in `ci.yml` change, and `release.yml` runs on tag
    push / `workflow_dispatch` (never on PRs), so it is **not** part of branch
    protection's `required_status_checks`. No update to
-   `kafkade/github-infra:repo_tock.tf` is needed. Re-verify if that ever
+   `kafkade/github-infra:repos/brega/main.tf` is needed. Re-verify if that ever
    changes.
 
 ## Nix packaging decision (1.0)
@@ -98,8 +98,8 @@ supported and in lockstep with `rust-toolchain.toml` in the meantime.
 ## crates.io decision (1.0)
 
 **Deferred for 1.0.** The workspace has 11 crates (including the AGPL-3.0
-`tock-server`), and a dependency-ordered `cargo publish` is non-trivial and
-unnecessary for a **binary-first CLI release** — users install `tock` via the
+`brega-server`), and a dependency-ordered `cargo publish` is non-trivial and
+unnecessary for a **binary-first CLI release** — users install `brega` via the
 channels above, not by depending on the libraries. The library APIs are also
 still pre-1.0 and expected to churn.
 
@@ -107,4 +107,4 @@ The plumbing already exists for when we opt in: the manual `publish` job in
 [`release.yml`](../../.github/workflows/release.yml)
 (`workflow_dispatch` with `publish_crates: true`) publishes the non-server
 crates in dependency order with dry-run validation and index waits.
-`tock-server` is intentionally excluded (AGPL-3.0).
+`brega-server` is intentionally excluded (AGPL-3.0).

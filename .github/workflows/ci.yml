@@ -56,8 +56,8 @@ jobs:
               - '.markdownlint-cli2.jsonc'
             web:
               - 'apps/web/**'
-              - 'crates/tock-wasm/**'
-              - 'crates/tock-account/**'
+              - 'crates/brega-wasm/**'
+              - 'crates/brega-account/**'
 
   # ── Rust checks ──────────────────────────────────────────────────────────────
 
@@ -134,10 +134,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: wasm
-      # Smoke test: verify tock-core compiles to WASM.
-      # Size gate (2 MB budget) will be added when tock-core gains cdylib
+      # Smoke test: verify brega-core compiles to WASM.
+      # Size gate (2 MB budget) will be added when brega-core gains cdylib
       # support and wasm-bindgen bindings.
-      - run: cargo build -p tock-core --target wasm32-unknown-unknown --no-default-features --features core
+      - run: cargo build -p brega-core --target wasm32-unknown-unknown --no-default-features --features core
 
   msrv:
     name: MSRV (1.95)
@@ -197,7 +197,7 @@ jobs:
 
   # Non-gating job (deliberately omitted from the `ci` aggregator's needs
   # for now). Once it has proven stable, add it to `ci.needs` and update
-  # branch protection in kafkade/github-infra:repo_tock.tf accordingly.
+  # branch protection in kafkade/github-infra:repos/brega/main.tf accordingly.
   coverage:
     name: Code coverage (Linux)
     needs: changes
@@ -227,8 +227,8 @@ jobs:
           fail_ci_if_error: false
 
   # ── Apple bindings (UniFFI Swift) ────────────────────────────────────────────
-  # Builds the TockFFI XCFramework via `cargo xtask xcframework` and runs the
-  # TockSwift integration tests against the real Rust core (macOS slice).
+  # Builds the BregaFFI XCFramework via `cargo xtask xcframework` and runs the
+  # BregaSwift integration tests against the real Rust core (macOS slice).
   apple:
     name: Apple bindings (Swift)
     needs: changes
@@ -243,7 +243,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Generate bindings + build XCFramework
         run: cargo xtask xcframework
-      - name: Run TockSwift tests
+      - name: Run BregaSwift tests
         run: swift test
         working-directory: bindings/swift
 
@@ -261,11 +261,11 @@ jobs:
   #         targets: aarch64-apple-ios,aarch64-apple-ios-sim
   #     - uses: Swatinem/rust-cache@v2
   #     - name: Build UniFFI bindings
-  #       run: cargo build -p tock-uniffi --target aarch64-apple-ios
+  #       run: cargo build -p brega-uniffi --target aarch64-apple-ios
   #     - name: Build iOS app
   #       run: |
   #         cd apps/ios
-  #         xcodebuild build -scheme Tock -destination 'generic/platform=iOS Simulator' -skipMacroValidation
+  #         xcodebuild build -scheme Brega -destination 'generic/platform=iOS Simulator' -skipMacroValidation
 
   # --- Web app build + tests ---
   web:
@@ -285,10 +285,10 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
       - name: Build WASM package
-        run: wasm-pack build crates/tock-wasm --target web --release
+        run: wasm-pack build crates/brega-wasm --target web --release
       - name: Check WASM size budget (2 MB gzip)
         run: |
-          gz=$(gzip -c crates/tock-wasm/pkg/tock_wasm_bg.wasm | wc -c)
+          gz=$(gzip -c crates/brega-wasm/pkg/brega_wasm_bg.wasm | wc -c)
           echo "gzip size: ${gz} bytes"
           test "${gz}" -lt 2097152
       - uses: actions/setup-node@v6

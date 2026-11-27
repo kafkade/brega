@@ -1,9 +1,9 @@
-// Admin + first-run client for the tock web console. HTTP lives here (per
-// ADR-001); all SRP/2SKD crypto runs in `tock-wasm`. The console is served
+// Admin + first-run client for the brega web console. HTTP lives here (per
+// ADR-001); all SRP/2SKD crypto runs in `brega-wasm`. The console is served
 // same-origin behind the reverse proxy, so `base` defaults to "" (relative
 // fetch); an explicit URL is still accepted for dev against a remote server.
 
-import { signup_account } from "tock-wasm";
+import { signup_account } from "brega-wasm";
 import { ensureWasm, type SignupBundle } from "./account";
 
 /** Public instance metadata from `GET /v1/server/info`. */
@@ -65,7 +65,7 @@ function authHeaders(auth: AdminAuth): Record<string, string> {
   const h: Record<string, string> = {
     Authorization: `Bearer ${auth.bearerToken}`,
   };
-  if (auth.channelBinding) h["X-Tock-Channel-Binding"] = auth.channelBinding;
+  if (auth.channelBinding) h["X-Brega-Channel-Binding"] = auth.channelBinding;
   return h;
 }
 

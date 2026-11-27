@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# tock web console image (Apache-2.0). Builds the WASM crypto binding and the
+# brega web console image (Apache-2.0). Builds the WASM crypto binding and the
 # React SPA, then serves the static bundle with nginx (which also proxies the
-# API to tock-server — see deploy/web/nginx.conf). Kept in a separate image
-# from the AGPL tock-server: the SPA talks to the server only over HTTP, so it
+# API to brega-server — see deploy/web/nginx.conf). Kept in a separate image
+# from the AGPL brega-server: the SPA talks to the server only over HTTP, so it
 # remains a separate work. See docs/self-hosting.md and ADR-006.
 
 # ── WASM builder ──────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
 WORKDIR /build
 COPY . .
-RUN wasm-pack build crates/tock-wasm --target web --out-dir pkg --release
+RUN wasm-pack build crates/brega-wasm --target web --out-dir pkg --release
 
 # ── Web builder ───────────────────────────────────────────────────────
 FROM node:20-bookworm-slim AS web
@@ -21,8 +21,8 @@ FROM node:20-bookworm-slim AS web
 WORKDIR /build
 COPY . .
 # Overlay the freshly built wasm package the app depends on
-# (package.json: "tock-wasm": "file:../../crates/tock-wasm/pkg").
-COPY --from=wasm /build/crates/tock-wasm/pkg ./crates/tock-wasm/pkg
+# (package.json: "brega-wasm": "file:../../crates/brega-wasm/pkg").
+COPY --from=wasm /build/crates/brega-wasm/pkg ./crates/brega-wasm/pkg
 
 WORKDIR /build/apps/web
 RUN npm install --no-audit --no-fund \

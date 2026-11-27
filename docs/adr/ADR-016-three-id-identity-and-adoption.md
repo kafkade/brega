@@ -14,13 +14,13 @@
 
 ## Context
 
-Tock is local-first and end-to-end encrypted: a vault can be created and used
+Brega is local-first and end-to-end encrypted: a vault can be created and used
 entirely on-device, and a server is an *optional*, zero-knowledge sync backend
 (ADR-011). Turning a local-only vault into a server-backed one — **adoption** —
 is the single core path still missing before 1.0 (tracked in the sync/server
 hardening epic #204; adoption itself is #197).
 
-Before that code is written, one thing must be pinned down: tock's account model
+Before that code is written, one thing must be pinned down: brega's account model
 uses **three distinct identifiers**, but ADR-011 describes only one
 "server-assigned `account_id`". That wording conflates a client-minted crypto
 identity with a server-minted principal, and is the root of the
@@ -29,36 +29,36 @@ codebase today:
 
 - **A — client crypto `account_id`.** Minted **locally** at first use
   (`let account_id = Uuid::now_v7();`,
-  `crates/tock-storage/src/vault.rs:235`), written into the vault header
-  (`VaultHeader.account_id`, `crates/tock-core/src/vault/header.rs:74`), and
+  `crates/brega-storage/src/vault.rs:235`), written into the vault header
+  (`VaultHeader.account_id`, `crates/brega-core/src/vault/header.rs:74`), and
   folded into the Unlock Root Key derivation: `derive_unlock_root_key` salts the
   Secret-Key HKDF step with `account_id ‖ kdf_version`
-  (`crates/tock-crypto/src/kdf.rs:150-164`). Because the URK roots the whole key
+  (`crates/brega-crypto/src/kdf.rs:150-164`). Because the URK roots the whole key
   hierarchy, **A is bound into the vault's cryptography and is stable for the
   life of the vault.** It exists whether or not a server is ever involved.
 
 - **V — `vault_id`.** A UUIDv7 also minted locally in `init`
-  (`crates/tock-storage/src/vault.rs:242`). It is the **sync bucket key**: the
+  (`crates/brega-storage/src/vault.rs:242`). It is the **sync bucket key**: the
   client addresses the server by `vault_id`
   (`HttpTransport::new(server, vault_id)`,
-  `crates/tock-cli/src/commands/account.rs:129`), and the server stores events
+  `crates/brega-cli/src/commands/account.rs:129`), and the server stores events
   and the wrapped header under it. Like A, it exists in a purely local vault.
 
 - **B — server principal `account_id`.** When a client registers with a server,
   the **server** mints its *own* `Uuid::now_v7()`
-  (`crates/tock-server/src/db.rs:754`) and returns it as
-  `RegisterResponse.account_id` (`crates/tock-account/src/signup.rs:167-169`).
+  (`crates/brega-server/src/db.rs:754`) and returns it as
+  `RegisterResponse.account_id` (`crates/brega-account/src/signup.rs:167-169`).
   It is the server's row key for the account (roles, quota, SRP verifier,
   sessions). The client today **discards it**
   (`let _reg: RegisterResponse = …`,
-  `crates/tock-cli/src/commands/account.rs:127`).
+  `crates/brega-cli/src/commands/account.rs:127`).
 
 ADR-011's "server-assigned `account_id`" collapses **A and B** into one name.
 They are neither minted by the same party nor used for the same purpose: **A**
 is client crypto identity (in the header, in the KDF); **B** is a server
 bookkeeping principal (in the server DB). The `VaultHeader.account_id`
 doc-comment currently even reads "Server-assigned account identifier this vault
-belongs to" (`crates/tock-core/src/vault/header.rs:72-74`), which is the same
+belongs to" (`crates/brega-core/src/vault/header.rs:72-74`), which is the same
 drift at the code level — **A is client-minted**, not server-assigned.
 (Correcting that doc-comment is left to the adoption implementation, #197; this
 ADR is the normative source it will follow.)
@@ -72,21 +72,21 @@ Two more facts shape the decision:
   server authoritative over the crypto identity and **break zero-knowledge**.
 - **Registration is pre-auth.** The register POST happens over TLS **before**
   SRP login; SRP channel binding covers only the later header `PUT`, not
-  `register` (`crates/tock-cli/src/commands/account.rs:113-133`). This has
+  `register` (`crates/brega-cli/src/commands/account.rs:113-133`). This has
   threat-model consequences (below).
 
 ## Decision
 
 ### 1. Name and separate the three identifiers
 
-Tock has exactly three account/vault identifiers. They are named, owned, and
+Brega has exactly three account/vault identifiers. They are named, owned, and
 scoped as follows and MUST be treated as distinct everywhere (code, docs, UX):
 
 | ID | Name | Minted by / where | Lifetime & scope | Purpose | Reference |
 |----|------|-------------------|------------------|---------|-----------|
-| **A** | Client crypto `account_id` | **Client**, at `init`, via `Uuid::now_v7()` | Stable for the life of the vault; exists with or without a server | Bound into 2SKD (salts the Secret-Key HKDF) and the vault-key-wrap AAD; part of the crypto identity | `tock-storage/src/vault.rs:235` (mint), `tock-crypto/src/kdf.rs:150-164` (`derive_unlock_root_key`), `tock-core/src/vault/header.rs:74` (`VaultHeader.account_id`) |
-| **V** | `vault_id` | **Client**, at `init`, via `Uuid::now_v7()` | Stable for the life of the vault | Sync bucket key: addresses the vault's events + wrapped header on a server | `tock-storage/src/vault.rs:242` (mint), `tock-cli/src/commands/account.rs:129` (`HttpTransport::new(server, vault_id)`) |
-| **B** | Server principal `account_id` | **Server**, at `register`, via `Uuid::now_v7()` | Per (server, account); one per server the vault is adopted onto | Server's principal key: roles, quota, SRP verifier, sessions | `tock-server/src/db.rs:754` (mint), `tock-account/src/signup.rs:167-169` (`RegisterResponse.account_id`) |
+| **A** | Client crypto `account_id` | **Client**, at `init`, via `Uuid::now_v7()` | Stable for the life of the vault; exists with or without a server | Bound into 2SKD (salts the Secret-Key HKDF) and the vault-key-wrap AAD; part of the crypto identity | `brega-storage/src/vault.rs:235` (mint), `brega-crypto/src/kdf.rs:150-164` (`derive_unlock_root_key`), `brega-core/src/vault/header.rs:74` (`VaultHeader.account_id`) |
+| **V** | `vault_id` | **Client**, at `init`, via `Uuid::now_v7()` | Stable for the life of the vault | Sync bucket key: addresses the vault's events + wrapped header on a server | `brega-storage/src/vault.rs:242` (mint), `brega-cli/src/commands/account.rs:129` (`HttpTransport::new(server, vault_id)`) |
+| **B** | Server principal `account_id` | **Server**, at `register`, via `Uuid::now_v7()` | Per (server, account); one per server the vault is adopted onto | Server's principal key: roles, quota, SRP verifier, sessions | `brega-server/src/db.rs:754` (mint), `brega-account/src/signup.rs:167-169` (`RegisterResponse.account_id`) |
 
 Invariants:
 
@@ -124,7 +124,7 @@ unchanged. This ADR only splits the overloaded name.
 
 A vault's relationship to a server is explicit binding state — **not** inferred
 from a device label. (The `"local"` label written at `init` is only a *device*
-label, `crates/tock-storage/src/vault.rs:242-245`; it is not a binding state.)
+label, `crates/brega-storage/src/vault.rs:242-245`; it is not a binding state.)
 The state is:
 
 - **`LocalOnly`** — no server binding. A and V exist; there is no B, no server
@@ -182,10 +182,10 @@ unless the user passes an explicit **`--migrate`**. This prevents split-brain,
 where the same `vault_id` (V) is pushed to two servers and the two histories
 diverge with no reconciliation. The split-brain exposure is concrete in the
 code today: the client persists a **single** global server URL
-(`crates/tock-storage/src/sync/mod.rs:38-66`) and a **single** credential entry
-(`crates/tock-cli/src/commands/account.rs:296-319`), and the `"local"` label is
+(`crates/brega-storage/src/sync/mod.rs:38-66`) and a **single** credential entry
+(`crates/brega-cli/src/commands/account.rs:296-319`), and the `"local"` label is
 only a device label, not a binding guard
-(`crates/tock-storage/src/vault.rs:242-245`) — so nothing currently stops the
+(`crates/brega-storage/src/vault.rs:242-245`) — so nothing currently stops the
 same vault from being adopted onto a second server.
 
 - The single persisted `{server URL, B, credentials}` entry is the source of
@@ -303,7 +303,7 @@ This is a security-sensitive path. Key threats and the stance taken:
 
 The URK derivation does **not** depend on email: `vault::open` derives keys from
 password + Secret Key + header only
-(`crates/tock-storage/src/vault.rs:203`, the `derive_unlock_root_key` call).
+(`crates/brega-storage/src/vault.rs:203`, the `derive_unlock_root_key` call).
 Therefore a local-only vault needs **no email**, and requiring one at `init`
 would add a server-shaped, identifying field to a purely on-device flow.
 
@@ -365,15 +365,15 @@ Question Q1.)
 - ADR-011's crypto (2SKD, URK-rooted hierarchy, SRP over URK, Emergency Kit) is
   untouched — only the overloaded `account_id` name is split.
 - No CI job names change; adoption/server work lands under existing gates
-  (mirror any *new* merge-gate jobs in `kafkade/github-infra` `repo_tock.tf`,
+  (mirror any *new* merge-gate jobs in `kafkade/github-infra` `repos/brega/main.tf`,
   per repo policy).
 
 ## Implementation impact (downstream, not in this ADR)
 
-- **#197 — `tock account adopt`.** Implements the `LocalOnly → ServerBacked`
+- **#197 — `brega account adopt`.** Implements the `LocalOnly → ServerBacked`
   transition from the existing header (A/V preserved, B minted, wrapped header
   uploaded, initial push), persists B + binding state, enforces §4, and defines
-  `tock account disconnect`. Also fixes the `VaultHeader.account_id`
+  `brega account disconnect`. Also fixes the `VaultHeader.account_id`
   doc-comment drift noted in Context.
 - **#198 — first-run local onboarding gate.** Forces a real password + saved
   Emergency Kit and keeps the local vault email-free per §9/Q1.

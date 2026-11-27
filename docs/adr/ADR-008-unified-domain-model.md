@@ -32,11 +32,11 @@ We need a unified data model where all four domains are first-class, share IDs a
 
 **Cross-domain primitives:**
 - Focus session → time block + habit XP.
-- `tock start <task>` → task status = `started`, urgency ↑.
-- `tock done <task>` → stops timer, completes focus session, logs time block.
+- `brega start <task>` → task status = `started`, urgency ↑.
+- `brega done <task>` → stops timer, completes focus session, logs time block.
 - Habit completion can satisfy a recurring task (`Task.satisfied_by_habit: Option<Uuid>`).
 - Project views aggregate tasks + habits + time blocks in one query.
-- Recurring task ↔ habit promotion: `tock task promote-to-habit 42` archives the recurring template and creates a habit with the same cadence.
+- Recurring task ↔ habit promotion: `brega task promote-to-habit 42` archives the recurring template and creates a habit with the same cadence.
 
 **Methodology-neutral:**
 GTD views (Inbox, Today, Anytime, Someday) are seeded saved queries, not hardcoded. Users can delete, edit, or replace them. Identity-based habits are encouraged but not required (users can create habits without identity statements). The system never enforces a workflow; it provides primitives.

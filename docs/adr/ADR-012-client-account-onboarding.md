@@ -24,10 +24,10 @@ to derive the URK, but the salt lives in the vault header it cannot yet read.
 
 ## Decision
 
-- A new zero-I/O crate, **`tock-account`**, owns all account orchestration:
+- A new zero-I/O crate, **`brega-account`**, owns all account orchestration:
   signup derivation, the SRP login state machine, `KdfParams`, credential
-  structs, and the Emergency Kit / Setup Code codecs. It wraps `tock-crypto` /
-  `tock-core` and produces plain request/response structs. **No HTTP** — each
+  structs, and the Emergency Kit / Setup Code codecs. It wraps `brega-crypto` /
+  `brega-core` and produces plain request/response structs. **No HTTP** — each
   client edge posts them (CLI/reqwest, Apple/URLSession via UniFFI, web/fetch
   via WASM). One protocol, one test surface.
 - **Emergency Kit**: text + printable PDF carrying server URL, email, and the
@@ -56,9 +56,9 @@ to derive the URK, but the salt lives in the vault header it cannot yet read.
 
 ## Status
 
-Implemented: shared `tock-account` orchestration, server vault-header
-bootstrap, CLI `tock account` + authed transport, UniFFI account API, the
-`tock-wasm` web binding, and a React + Vite web app (`apps/web`) with
+Implemented: shared `brega-account` orchestration, server vault-header
+bootstrap, CLI `brega account` + authed transport, UniFFI account API, the
+`brega-wasm` web binding, and a React + Vite web app (`apps/web`) with
 signup → Emergency Kit / Setup Code → login → authed sync. Web credentials
 default to in-memory (sessionStorage opt-in); the Secret Key is never persisted
 in the browser. SwiftUI signup/sign-in views remain a follow-up.
@@ -78,5 +78,5 @@ The critical self-host path — first-run admin → save Emergency Kit → SRP l
 authenticated call, with all SRP / 2SKD performed in-browser and **no secrets
 (password / Secret Key) transmitted** — is covered by a real-WASM smoke test in
 the `web` CI job (`apps/web/test/smoke.selfhost.test.ts`) and an opt-in true
-end-to-end test against a live `tock-server` (`apps/web/test/e2e.selfhost.test.ts`,
-gated on `TOCK_E2E=1`).
+end-to-end test against a live `brega-server` (`apps/web/test/e2e.selfhost.test.ts`,
+gated on `BREGA_E2E=1`).

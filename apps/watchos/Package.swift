@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "TockWatch",
+    name: "BregaWatch",
     platforms: [
         .watchOS(.v10),
     ],
@@ -12,11 +12,11 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "TockWatch",
+            name: "BregaWatch",
             dependencies: [
-                .product(name: "TockSwift", package: "Tock"),
+                .product(name: "BregaSwift", package: "Brega"),
             ],
-            path: "Sources/TockWatch",
+            path: "Sources/BregaWatch",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]

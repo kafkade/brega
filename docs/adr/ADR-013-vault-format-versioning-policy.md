@@ -13,7 +13,7 @@
 
 ## Context
 
-The vault header (`tock-core/src/vault/header.rs`) carries a `format_version`.
+The vault header (`brega-core/src/vault/header.rs`) carries a `format_version`.
 [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md)'s two-secret key
 derivation (2SKD) bumped it from `1` to `2`: the header gained `account_id` and
 `kdf_version`, and the key hierarchy now roots in the Unlock Root Key (password
@@ -28,7 +28,7 @@ MIN_COMPAT_VERSION  = 2   // lowest format this build will open
 ```
 
 ```rust
-// tock-core/src/vault/header.rs — VaultHeader::from_meta
+// brega-core/src/vault/header.rs — VaultHeader::from_meta
 if format_version < MIN_COMPAT_VERSION {
     return Err(Error::VaultNeedsReinit { found: format_version });
 }
@@ -64,26 +64,26 @@ We **ratify** "no automatic migration; re-initialize" as the **final** pre-1.0
 vault-format break. At and after 1.0 there is no code path that opens or
 upgrades a `v1` password-only vault; `MIN_COMPAT_VERSION` stays `2`.
 
-We deliberately do **not** ship a `tock migrate` command, because:
+We deliberately do **not** ship a `brega migrate` command, because:
 
 - No official release ever distributed `v1`; the affected population is a
   handful of pre-#126 dogfooders.
-- Data is not trapped. tock is local-first with JSON export/import
-  (`tock-export` / `tock-import`), so the upgrade path is a lossless
+- Data is not trapped. brega is local-first with JSON export/import
+  (`brega-export` / `brega-import`), so the upgrade path is a lossless
   **export → re-init → import**.
 - 2SKD mandates a freshly generated Secret Key and a new Emergency Kit anyway,
   so a "migration" would still force new-account onboarding — it would not be
   meaningfully smoother than re-init, while adding permanent maintenance
   surface and a second, rarely exercised crypto path to keep correct.
 
-**One-time upgrade note (documented for users):** if `tock` reports the
+**One-time upgrade note (documented for users):** if `brega` reports the
 legacy-format error, export from the old build, re-initialize with 1.0
-(`tock account signup` / `tock init`), and re-import. Store the new Emergency
+(`brega account signup` / `brega init`), and re-import. Store the new Emergency
 Kit and Secret Key safely.
 
 ### 2. Forward compatibility guarantee for v2 (from 1.0 onward)
 
-From 1.0, tock makes the following promises about the `v2` vault format:
+From 1.0, brega makes the following promises about the `v2` vault format:
 
 - **Readability within 1.x.** Any `v2` vault written by a 1.x build opens on
   every later 1.x build. `MIN_COMPAT_VERSION` will **not** be raised above `2`

@@ -1,34 +1,34 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/tock-core",
-    "crates/tock-crypto",
-    "crates/tock-account",
-    "crates/tock-parse",
-    "crates/tock-storage",
-    "crates/tock-sync",
-    "crates/tock-import",
-    "crates/tock-export",
-    "crates/tock-caldav",
-    "crates/tock-cli",
-    "crates/tock-server",
-    "crates/tock-uniffi",
-    "crates/tock-wasm",
+    "crates/brega-core",
+    "crates/brega-crypto",
+    "crates/brega-account",
+    "crates/brega-parse",
+    "crates/brega-storage",
+    "crates/brega-sync",
+    "crates/brega-import",
+    "crates/brega-export",
+    "crates/brega-caldav",
+    "crates/brega-cli",
+    "crates/brega-server",
+    "crates/brega-uniffi",
+    "crates/brega-wasm",
     "xtask",
 ]
 default-members = [
-    "crates/tock-core",
-    "crates/tock-crypto",
-    "crates/tock-account",
-    "crates/tock-parse",
-    "crates/tock-storage",
-    "crates/tock-sync",
-    "crates/tock-import",
-    "crates/tock-export",
-    "crates/tock-caldav",
-    "crates/tock-cli",
-    "crates/tock-server",
-    "crates/tock-uniffi",
+    "crates/brega-core",
+    "crates/brega-crypto",
+    "crates/brega-account",
+    "crates/brega-parse",
+    "crates/brega-storage",
+    "crates/brega-sync",
+    "crates/brega-import",
+    "crates/brega-export",
+    "crates/brega-caldav",
+    "crates/brega-cli",
+    "crates/brega-server",
+    "crates/brega-uniffi",
 ]
 
 [workspace.package]
@@ -36,26 +36,26 @@ version = "0.5.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
-repository = "https://github.com/kafkade/tock"
-homepage = "https://github.com/kafkade/tock"
-authors = ["The tock authors"]
+repository = "https://github.com/kafkade/brega"
+homepage = "https://github.com/kafkade/brega"
+authors = ["The brega authors"]
 
 # Shared dependency versions. Members opt in via `dep = { workspace = true }`.
 # Kept intentionally small for the foundation phase; expand as real
 # implementation lands.
 [workspace.dependencies]
-tock-core = { path = "crates/tock-core", version = "0.5.0" }
-tock-crypto = { path = "crates/tock-crypto", version = "0.5.0" }
-tock-account = { path = "crates/tock-account", version = "0.5.0" }
-tock-parse = { path = "crates/tock-parse", version = "0.5.0" }
-tock-storage = { path = "crates/tock-storage", version = "0.5.0" }
-tock-sync = { path = "crates/tock-sync", version = "0.5.0" }
-tock-import = { path = "crates/tock-import", version = "0.5.0" }
-tock-export = { path = "crates/tock-export", version = "0.5.0" }
-tock-caldav = { path = "crates/tock-caldav", version = "0.5.0" }
-tock-server = { path = "crates/tock-server", version = "0.5.0" }
+brega-core = { path = "crates/brega-core", version = "0.5.0" }
+brega-crypto = { path = "crates/brega-crypto", version = "0.5.0" }
+brega-account = { path = "crates/brega-account", version = "0.5.0" }
+brega-parse = { path = "crates/brega-parse", version = "0.5.0" }
+brega-storage = { path = "crates/brega-storage", version = "0.5.0" }
+brega-sync = { path = "crates/brega-sync", version = "0.5.0" }
+brega-import = { path = "crates/brega-import", version = "0.5.0" }
+brega-export = { path = "crates/brega-export", version = "0.5.0" }
+brega-caldav = { path = "crates/brega-caldav", version = "0.5.0" }
+brega-server = { path = "crates/brega-server", version = "0.5.0" }
 
-# Crypto primitives (used by tock-crypto). All audited RustCrypto crates.
+# Crypto primitives (used by brega-crypto). All audited RustCrypto crates.
 # See docs/adr/ADR-002-end-to-end-encryption.md.
 aes-gcm = "0.11"
 argon2 = "0.5"
@@ -66,7 +66,7 @@ ed25519-dalek = { version = "3", default-features = false, features = ["rand_cor
 # SRP-6a (RFC 5054) PAKE for zero-knowledge auth (ADR-010/011). The 0.7 line is
 # constant-time (crypto-bigint), RFC5054-correct, and uses digest 0.11 matching
 # our sha2 0.11. `default-features = false` drops the crate's own getrandom/
-# rand_core — ephemerals are generated via `tock_crypto::random::fill_random`.
+# rand_core — ephemerals are generated via `brega_crypto::random::fill_random`.
 srp = { version = "0.7.0-rc.3", default-features = false }
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
@@ -81,12 +81,12 @@ uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 time = { version = "0.3", default-features = false, features = ["std", "macros", "formatting", "parsing", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.40", features = ["bundled", "blob", "uuid", "time"] }
+rusqlite = { version = "0.41", features = ["bundled", "blob", "uuid", "time"] }
 # Unicode NFKC normalization for server-side identifier canonicalization
 # (issue #199). Already in the tree transitively; MIT/Apache-2.0.
 unicode-normalization = "0.1"
 
-# Async runtime + HTTP server (used by tock-server, AGPL-3.0).
+# Async runtime + HTTP server (used by brega-server, AGPL-3.0).
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
@@ -140,7 +140,7 @@ tempfile = "3"
 fluent-syntax = "0.12"
 
 # Mandatory lint set per docs/architecture.md §4.1.1. Members opt in with
-# `[lints] workspace = true`. `tock-uniffi` overrides `unsafe_code` because
+# `[lints] workspace = true`. `brega-uniffi` overrides `unsafe_code` because
 # UniFFI-generated code requires `unsafe` blocks; that crate isolates all
 # unsafe FFI behind its boundary.
 [workspace.lints.rust]
@@ -161,7 +161,7 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
-# Profile for the Apple FFI static libraries packaged into TockFFI.xcframework.
+# Profile for the Apple FFI static libraries packaged into BregaFFI.xcframework.
 # Inherits the optimised release settings but keeps symbols: stripping would
 # remove the `#[no_mangle]` UniFFI scaffolding functions, breaking linkage
 # from the generated Swift bindings. See xtask `xcframework` and issue #119.

@@ -58,9 +58,9 @@ jobs:
       - name: Build release binary
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p tock-cli
+            cross build --release --target ${{ matrix.target }} -p brega-cli
           else
-            cargo build --release --target ${{ matrix.target }} -p tock-cli
+            cargo build --release --target ${{ matrix.target }} -p brega-cli
           fi
         shell: bash
 
@@ -83,7 +83,7 @@ jobs:
           APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
           APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
           APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
-          BIN_PATH: target/${{ matrix.target }}/release/tock
+          BIN_PATH: target/${{ matrix.target }}/release/brega
         run: |
           set -euo pipefail
 
@@ -92,10 +92,10 @@ jobs:
             exit 0
           fi
 
-          KEYCHAIN="$RUNNER_TEMP/tock-signing.keychain-db"
+          KEYCHAIN="$RUNNER_TEMP/brega-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
           CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
-          NOTARIZE_ZIP="$RUNNER_TEMP/tock-notarize.zip"
+          NOTARIZE_ZIP="$RUNNER_TEMP/brega-notarize.zip"
 
           cleanup() {
             security delete-keychain "$KEYCHAIN" 2>/dev/null || true
@@ -141,26 +141,26 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../tock-${{ github.ref_name }}-${{ matrix.target }}.tar.gz tock
+          tar czf ../../../brega-${{ github.ref_name }}-${{ matrix.target }}.tar.gz brega
           cd ../../..
-          sha256sum tock-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > tock-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          sha256sum brega-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > brega-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
 
       - name: Package binary (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/tock.exe" -DestinationPath "tock-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          $hash = (Get-FileHash "tock-${{ github.ref_name }}-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  tock-${{ github.ref_name }}-${{ matrix.target }}.zip" | Out-File -Encoding ascii "tock-${{ github.ref_name }}-${{ matrix.target }}.zip.sha256"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/brega.exe" -DestinationPath "brega-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash "brega-${{ github.ref_name }}-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  brega-${{ github.ref_name }}-${{ matrix.target }}.zip" | Out-File -Encoding ascii "brega-${{ github.ref_name }}-${{ matrix.target }}.zip.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: tock-${{ matrix.target }}
+          name: brega-${{ matrix.target }}
           path: |
-            tock-*.tar.gz
-            tock-*.zip
-            tock-*.sha256
+            brega-*.tar.gz
+            brega-*.zip
+            brega-*.sha256
 
   release:
     name: Create GitHub Release
@@ -214,8 +214,8 @@ jobs:
             artifacts/*
 
   # ── Homebrew tap publishing ────────────────────────────────────────────────
-  # Publishes a populated `Formula/tock.rb` to `kafkade/homebrew-tap` on each
-  # tagged release, so `brew install kafkade/tap/tock` resolves the just-built
+  # Publishes a populated `Formula/brega.rb` to `kafkade/homebrew-tap` on each
+  # tagged release, so `brew install kafkade/tap/brega` resolves the just-built
   # binaries. We do this here (not via cargo-dist) because this repo drives
   # releases from this hand-written workflow — cargo-dist only validates config
   # in CI (see docs/distribution/README.md and dist-workspace.toml).
@@ -255,60 +255,60 @@ jobs:
             aarch64-unknown-linux-gnu \
             x86_64-unknown-linux-gnu; do
             gh release download "$TAG" --repo "${{ github.repository }}" \
-              --pattern "tock-${TAG}-${target}.tar.gz.sha256" --dir "$WORK"
+              --pattern "brega-${TAG}-${target}.tar.gz.sha256" --dir "$WORK"
           done
 
           sha_for() {
             # First whitespace-delimited field of the .sha256 file is the digest.
-            awk '{print $1}' "$WORK/tock-${TAG}-$1.tar.gz.sha256"
+            awk '{print $1}' "$WORK/brega-${TAG}-$1.tar.gz.sha256"
           }
           SHA_MAC_ARM="$(sha_for aarch64-apple-darwin)"
           SHA_MAC_X86="$(sha_for x86_64-apple-darwin)"
           SHA_LNX_ARM="$(sha_for aarch64-unknown-linux-gnu)"
           SHA_LNX_X86="$(sha_for x86_64-unknown-linux-gnu)"
 
-          echo "── Rendering Formula/tock.rb for $VERSION ──"
+          echo "── Rendering Formula/brega.rb for $VERSION ──"
           mkdir -p "$WORK/tap/Formula"
-          cat > "$WORK/tap/Formula/tock.rb" <<EOF
+          cat > "$WORK/tap/Formula/brega.rb" <<EOF
           # typed: false
           # frozen_string_literal: true
 
-          # Generated by kafkade/tock release.yml for tag ${TAG}. Do not edit by hand.
+          # Generated by kafkade/brega release.yml for tag ${TAG}. Do not edit by hand.
 
-          class Tock < Formula
+          class Brega < Formula
             desc "Unified personal productivity engine — tasks, habits, time tracking, focus timer"
-            homepage "https://github.com/kafkade/tock"
+            homepage "https://github.com/kafkade/brega"
             version "${VERSION}"
             license "Apache-2.0"
 
             on_macos do
               on_arm do
-                url "https://github.com/kafkade/tock/releases/download/${TAG}/tock-${TAG}-aarch64-apple-darwin.tar.gz"
+                url "https://github.com/kafkade/brega/releases/download/${TAG}/brega-${TAG}-aarch64-apple-darwin.tar.gz"
                 sha256 "${SHA_MAC_ARM}"
               end
               on_intel do
-                url "https://github.com/kafkade/tock/releases/download/${TAG}/tock-${TAG}-x86_64-apple-darwin.tar.gz"
+                url "https://github.com/kafkade/brega/releases/download/${TAG}/brega-${TAG}-x86_64-apple-darwin.tar.gz"
                 sha256 "${SHA_MAC_X86}"
               end
             end
 
             on_linux do
               on_arm do
-                url "https://github.com/kafkade/tock/releases/download/${TAG}/tock-${TAG}-aarch64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/kafkade/brega/releases/download/${TAG}/brega-${TAG}-aarch64-unknown-linux-gnu.tar.gz"
                 sha256 "${SHA_LNX_ARM}"
               end
               on_intel do
-                url "https://github.com/kafkade/tock/releases/download/${TAG}/tock-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/kafkade/brega/releases/download/${TAG}/brega-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
                 sha256 "${SHA_LNX_X86}"
               end
             end
 
             def install
-              bin.install "tock"
+              bin.install "brega"
             end
 
             test do
-              assert_match version.to_s, shell_output("#{bin}/tock --version")
+              assert_match version.to_s, shell_output("#{bin}/brega --version")
             end
           end
           EOF
@@ -318,17 +318,17 @@ jobs:
           git init -q
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/tock.rb
-          git commit -q -m "tock ${VERSION}"
+          git add Formula/brega.rb
+          git commit -q -m "brega ${VERSION}"
           git push -q --force \
             "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" \
             HEAD:refs/heads/main
-          echo "✅ Published tock ${VERSION} to ${TAP_REPO}"
+          echo "✅ Published brega ${VERSION} to ${TAP_REPO}"
 
   # ── Crates.io publishing ───────────────────────────────────────────────────
   # Manual-only via workflow_dispatch.  Publishes crates in dependency order
   # with dry-run validation and crates.io index waits between each.
-  # Note: tock-server is AGPL-3.0 and intentionally excluded.
+  # Note: brega-server is AGPL-3.0 and intentionally excluded.
   publish:
     name: Publish to crates.io
     if: github.event_name == 'workflow_dispatch' && inputs.publish_crates
@@ -374,12 +374,12 @@ jobs:
           }
 
           # Publish order follows the dependency graph (leaves first).
-          # tock-server is AGPL-3.0 — excluded from crates.io publishing.
-          publish_crate tock-crypto
-          publish_crate tock-core
-          publish_crate tock-parse
-          publish_crate tock-storage
-          publish_crate tock-sync
-          publish_crate tock-import
-          publish_crate tock-export
-          publish_crate tock-cli
+          # brega-server is AGPL-3.0 — excluded from crates.io publishing.
+          publish_crate brega-crypto
+          publish_crate brega-core
+          publish_crate brega-parse
+          publish_crate brega-storage
+          publish_crate brega-sync
+          publish_crate brega-import
+          publish_crate brega-export
+          publish_crate brega-cli

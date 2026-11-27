@@ -1,11 +1,11 @@
 {
-  "name": "@tock/web",
+  "name": "@brega/web",
   "private": true,
   "version": "0.4.0",
   "type": "module",
-  "description": "tock web client — account signup/login with Secret Key onboarding, minimal task UI.",
+  "description": "brega web client — account signup/login with Secret Key onboarding, minimal task UI.",
   "scripts": {
-    "wasm": "wasm-pack build ../../crates/tock-wasm --target web --out-dir pkg --release",
+    "wasm": "wasm-pack build ../../crates/brega-wasm --target web --out-dir pkg --release",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
@@ -16,7 +16,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "qrcode": "^1.5.4",
-    "tock-wasm": "file:../../crates/tock-wasm/pkg"
+    "brega-wasm": "file:../../crates/brega-wasm/pkg"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.1",

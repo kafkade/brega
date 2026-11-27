@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "TockMac",
+    name: "BregaMac",
     platforms: [
         .macOS(.v14),
     ],
@@ -12,11 +12,11 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "TockMac",
+            name: "BregaMac",
             dependencies: [
-                .product(name: "TockSwift", package: "Tock"),
+                .product(name: "BregaSwift", package: "Brega"),
             ],
-            path: "Sources/TockMac",
+            path: "Sources/BregaMac",
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]

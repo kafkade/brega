@@ -12,18 +12,18 @@ server-assigned accounts, and Emergency-Kit onboarding UX tracked separately)
 
 ## Context
 
-Tock is end-to-end encrypted and local-first, but three facts about the current design
+Brega is end-to-end encrypted and local-first, but three facts about the current design
 limit how it can be deployed and recovered:
 
-1. **Crypto is password-only.** `tock_core::vault::KeyHierarchy::derive_master_key(password,
+1. **Crypto is password-only.** `brega_core::vault::KeyHierarchy::derive_master_key(password,
    &header)` derives the Master Key (MK) from the password plus the per-vault Argon2id salt
-   (`tock-crypto/src/kdf.rs`). There is **no second secret**. The strength of the entire vault
+   (`brega-crypto/src/kdf.rs`). There is **no second secret**. The strength of the entire vault
    is bounded by the entropy of a human-chosen password, and a stolen server SRP verifier (once
    SRP ships) is offline-crackable at password strength.
 2. **SRP is unimplemented.** [ADR-010](ADR-010-srp-authentication.md) specifies SRP-6a, but no
-   SRP code exists — `tock-crypto/src/keyexchange.rs` is X25519/Ed25519 Diffie–Hellman, not SRP.
+   SRP code exists — `brega-crypto/src/keyexchange.rs` is X25519/Ed25519 Diffie–Hellman, not SRP.
    This is the moment to fix the *input* to SRP before any verifier format is locked in.
-3. **Accounts are hosted-mode-only.** `tock-server/src/accounts.rs` returns `404` unless the
+3. **Accounts are hosted-mode-only.** `brega-server/src/accounts.rs` returns `404` unless the
    server runs in `--mode hosted`; the schema (`db.rs`) is `accounts(id, email, api_token, tier)`
    with random-bearer (`tok_…`) auth. **Self-hosted mode has no accounts and no auth** — vaults,
    devices, and events are anonymous, keyed only by `vault_id`. Multi-device today is
@@ -44,12 +44,12 @@ Two reconciliations are required and have been **confirmed**:
   recovery path**. The 24-word recovery key / `vk_recover_ct` from
   [ADR-002](ADR-002-end-to-end-encryption.md) is **dropped**. Losing the Secret Key with no
   Emergency Kit is **unrecoverable by design**.
-- **Multi-tenancy.** Self-hosted Tock is **multi-user**: one `admin` plus N `user` accounts,
+- **Multi-tenancy.** Self-hosted Brega is **multi-user**: one `admin` plus N `user` accounts,
   Immich-style.
 
 ## Decision
 
-Tock adopts a **two-secret key derivation (2SKD)** rooted in an account **password** (something
+Brega adopts a **two-secret key derivation (2SKD)** rooted in an account **password** (something
 the user knows) and a client-generated **Secret Key** (something the user has). The combined
 output is the **Unlock Root Key (URK)**, which both (a) seeds the SRP authentication secret and
 (b) roots the existing vault key hierarchy. The server never receives the password or the Secret
@@ -87,7 +87,7 @@ salt           = vault.kdf_salt              (16 B, random per account/vault)
 account_id     = vault.account_id            (16 B, server-assigned account UUID)
 kdf_version    = vault.kdf_version            (u16; selects params + info strings)
 
-K_pw  = Argon2id(password, salt, params=TOCK_V1)                        // 32 B  (something you know)
+K_pw  = Argon2id(password, salt, params=BREGA_V1)                        // 32 B  (something you know)
 K_sk  = HKDF-SHA256(ikm = secret_key,
                     salt = account_id,
                     info = "Tock/2skd/v1/secret-key", len = 32)         // 32 B  (something you have)
@@ -181,7 +181,7 @@ There is **one** recovery path — the **Emergency Kit**, a printable/savable do
 - the **sign-in address** (server URL),
 - the **account email**,
 - the **Secret Key** (the `A4-…` string above),
-- a space for the user to optionally write the password (1Password convention; Tock never stores it).
+- a space for the user to optionally write the password (1Password convention; Brega never stores it).
 
 Recovery / new-device sign-in = password + Secret Key → URK → MEK → unwrap VK → pull & decrypt.
 There is **no** server-side reset and **no** VK escrow. **Losing the Secret Key with no Emergency
@@ -229,8 +229,8 @@ primary path and is not required for onboarding.
   Kit lose their data permanently. This is a deliberate, clearly communicated trade-off.
 - **Higher onboarding friction:** users must safeguard and (sometimes) transcribe a 128-bit
   Secret Key; mitigated by Setup Code/QR scanning and keystore caching after first sign-in.
-- **Implementation surface grows:** 2SKD + SRP-6a in `tock-crypto`, account/role/session schema
-  and auth middleware in `tock-server`, and onboarding/Emergency-Kit UX in clients. Tracked by
+- **Implementation surface grows:** 2SKD + SRP-6a in `brega-crypto`, account/role/session schema
+  and auth middleware in `brega-server`, and onboarding/Emergency-Kit UX in clients. Tracked by
   dependent issues.
 
 **Neutral:**
@@ -243,13 +243,13 @@ primary path and is not required for onboarding.
 
 ## Implementation impact (downstream, not in this ADR)
 
-- `tock-crypto`: add 2SKD (`URK = K_pw XOR K_sk`), Secret Key generation/encoding/checksum,
+- `brega-crypto`: add 2SKD (`URK = K_pw XOR K_sk`), Secret Key generation/encoding/checksum,
   SRP-6a (`x` from URK, verifier, login), `kdf_version` plumbing.
-- `tock-core` / `tock-storage`: vault header v2 (`account_id`, `kdf_version`; drop `vk_recover_*`),
+- `brega-core` / `brega-storage`: vault header v2 (`account_id`, `kdf_version`; drop `vk_recover_*`),
   URK-rooted `KeyHierarchy`, header AAD coverage.
-- `tock-server`: account/role/session schema, SRP endpoints, self-hosted auth middleware, admin
+- `brega-server`: account/role/session schema, SRP endpoints, self-hosted auth middleware, admin
   bootstrap, per-account authorization. **Branch-protection / CI note:** new server routes don't
   change CI job names, but any new merge-gate jobs must be mirrored in `kafkade/github-infra`
-  (`repo_tock.tf`).
+  (`repos/brega/main.tf`).
 - Clients: password + Secret Key onboarding, Emergency Kit generation + "save/print" gate,
   keystore caching of the Secret Key.

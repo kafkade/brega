@@ -1,13 +1,13 @@
-# Dogfooding tock sync
+# Dogfooding brega sync
 
-This guide walks through running your own `tock-server` and syncing two
-`tock` CLI vaults through it end to end: initialize a vault, pair a second
+This guide walks through running your own `brega-server` and syncing two
+`brega` CLI vaults through it end to end: initialize a vault, pair a second
 device over the real onboarding handshake, and verify a round-trip
 (including how conflicts surface). It is the manual companion to the
 automated acceptance test in
-[`crates/tock-cli/tests/e2e_sync.rs`](../crates/tock-cli/tests/e2e_sync.rs),
+[`crates/brega-cli/tests/e2e_sync.rs`](../crates/brega-cli/tests/e2e_sync.rs),
 which exercises the same end-to-end loop in CI — setting up the second
-device with `tock account signup` / `tock account login` (the account flow
+device with `brega account signup` / `brega account login` (the account flow
 from #129) rather than the manual onboarding handshake below.
 
 Everything below is **end-to-end encrypted**: the server only ever stores
@@ -15,16 +15,16 @@ opaque ciphertext. Your password and vault key never leave your devices
 (see [ADR-002](adr/ADR-002-end-to-end-encryption.md) and the
 [encryption note](#how-your-data-stays-private) at the end).
 
-> **Licensing note.** `tock-server` is **AGPL-3.0-only**
-> ([ADR-006](adr/ADR-006-licensing-dual-license.md)); the `tock` CLI is
+> **Licensing note.** `brega-server` is **AGPL-3.0-only**
+> ([ADR-006](adr/ADR-006-licensing-dual-license.md)); the `brega` CLI is
 > Apache-2.0. Running your own server is fully supported — the source is in
-> [`crates/tock-server/`](../crates/tock-server/).
+> [`crates/brega-server/`](../crates/brega-server/).
 
 ## Prerequisites
 
-- A built `tock` CLI binary (`cargo build --release -p tock-cli`, then use
-  `target/release/tock`, or install from
-  [Releases](https://github.com/kafkade/tock/releases)).
+- A built `brega` CLI binary (`cargo build --release -p brega-cli`, then use
+  `target/release/brega`, or install from
+  [Releases](https://github.com/kafkade/brega/releases)).
 - Docker (for the quickest server setup) **or** a Rust toolchain to run the
   server with `cargo`.
 
@@ -33,8 +33,8 @@ non-interactively:
 
 | Variable        | Meaning                                              |
 | --------------- | ---------------------------------------------------- |
-| `TOCK_VAULT`    | Path to the vault file (created on first use).       |
-| `TOCK_PASSWORD` | Vault password (omit it to be prompted interactively). |
+| `BREGA_VAULT`    | Path to the vault file (created on first use).       |
+| `BREGA_PASSWORD` | Vault password (omit it to be prompted interactively). |
 
 ## 1. Run the server
 
@@ -48,9 +48,9 @@ docker compose up -d
 ```
 
 This builds the stack from [`Dockerfile`](../Dockerfile) +
-[`Dockerfile.web`](../Dockerfile.web) and starts `tock-server` behind the
-`tock-web` console on port `8080`, persisting the encrypted database in the
-`tock-data` named volume. Confirm it is healthy:
+[`Dockerfile.web`](../Dockerfile.web) and starts `brega-server` behind the
+`brega-web` console on port `8080`, persisting the encrypted database in the
+`brega-data` named volume. Confirm it is healthy:
 
 ```sh
 curl -f http://localhost:8080/health
@@ -63,15 +63,15 @@ management, backup/restore — see the
 ### Option B — `cargo run`
 
 ```sh
-cargo run --release -p tock-server -- \
+cargo run --release -p brega-server -- \
   --bind 127.0.0.1:8080 \
-  --data-dir ./tock-server-data
+  --data-dir ./brega-server-data
 ```
 
 The server defaults to **self-hosted** mode, which exposes only the
 encrypted blob-store endpoints (no accounts, no billing). Configuration is
-also available via environment variables: `TOCK_BIND`, `TOCK_DATA_DIR`, and
-`TOCK_MODE`.
+also available via environment variables: `BREGA_BIND`, `BREGA_DATA_DIR`, and
+`BREGA_MODE`.
 
 For the rest of this guide we assume the server is reachable at
 `http://127.0.0.1:8080` — substitute your real host/port (for a remote
@@ -82,17 +82,17 @@ server, put it behind TLS).
 Pick a vault path and password, add a task, then push to the server:
 
 ```sh
-export TOCK_VAULT="$HOME/.local/share/tock/a.tockvault"
-export TOCK_PASSWORD="correct horse battery staple"
+export BREGA_VAULT="$HOME/.local/share/brega/a.bregavault"
+export BREGA_PASSWORD="correct horse battery staple"
 
-tock add "Buy groceries #errands"
-tock add "Write sync guide"
+brega add "Buy groceries #errands"
+brega add "Write sync guide"
 
 # Pass --server once; the URL is remembered in the vault thereafter.
-tock sync --server http://127.0.0.1:8080
+brega sync --server http://127.0.0.1:8080
 ```
 
-The first `tock sync` registers this device with the server and pushes your
+The first `brega sync` registers this device with the server and pushes your
 events. Expect output like:
 
 ```text
@@ -110,16 +110,16 @@ people would read codes to each other.
 In **terminal A** (the already-onboarded device), start the invite:
 
 ```sh
-export TOCK_VAULT="$HOME/.local/share/tock/a.tockvault"
-export TOCK_PASSWORD="correct horse battery staple"
+export BREGA_VAULT="$HOME/.local/share/brega/a.bregavault"
+export BREGA_PASSWORD="correct horse battery staple"
 
-tock onboard invite --server http://127.0.0.1:8080
+brega onboard invite --server http://127.0.0.1:8080
 ```
 
 It prints values to hand to the new device and then waits:
 
 ```text
-Share these values with the new device's `tock onboard accept`:
+Share these values with the new device's `brega onboard accept`:
   --server http://127.0.0.1:8080
   --vault-id <hex>
   --inviter-pubkey <hex>
@@ -132,10 +132,10 @@ In **terminal B** (the new device, a fresh vault path and its own
 password), run `accept` with the four values above:
 
 ```sh
-export TOCK_VAULT="$HOME/.local/share/tock/b.tockvault"
-export TOCK_PASSWORD="a different password for device B"
+export BREGA_VAULT="$HOME/.local/share/brega/b.bregavault"
+export BREGA_PASSWORD="a different password for device B"
 
-tock onboard accept \
+brega onboard accept \
   --server http://127.0.0.1:8080 \
   --vault-id <hex> \
   --inviter-pubkey <hex> \
@@ -148,7 +148,7 @@ anti-MITM check). It then prints **its own** three values and starts
 polling:
 
 ```text
-Give these values to the inviter's `tock onboard invite` prompt:
+Give these values to the inviter's `brega onboard invite` prompt:
   Acceptor public key: <hex>
   Acceptor fingerprint: <hex>
   Acceptor device id: <hex>
@@ -174,7 +174,7 @@ Device B now holds the same vault key and has pulled the existing history.
 Confirm it sees device A's tasks:
 
 ```sh
-tock ls          # device B should list "Buy groceries" and "Write sync guide"
+brega ls          # device B should list "Buy groceries" and "Write sync guide"
 ```
 
 ## 4. Verify a round-trip
@@ -184,24 +184,24 @@ a task and pushes; device A pulls it:
 
 ```sh
 # Device B (its env still set)
-tock add "Pulled from B"
-tock sync                 # --server is remembered; no flag needed
+brega add "Pulled from B"
+brega sync                 # --server is remembered; no flag needed
 
 # Device A
-tock sync
-tock ls                   # now includes "Pulled from B"
+brega sync
+brega ls                   # now includes "Pulled from B"
 ```
 
 Modifications and completions propagate the same way:
 
 ```sh
 # Device A completes a task and pushes
-tock done 1
-tock sync
+brega done 1
+brega sync
 
 # Device B pulls and sees it done
-tock sync
-tock ls
+brega sync
+brega ls
 ```
 
 After a sync round in each direction, both vaults converge to the same set
@@ -217,39 +217,39 @@ a conflict for you to review.
 ```sh
 # On A and B, edit the same task's title differently *without* syncing:
 # Device A
-tock modify 1 title:RenamedByA
-tock sync
+brega modify 1 title:RenamedByA
+brega sync
 
 # Device B
-tock modify 1 title:RenamedByB
-tock sync
+brega modify 1 title:RenamedByB
+brega sync
 ```
 
 Device B's sync reports the conflict:
 
 ```text
 Synced with http://127.0.0.1:8080: pushed 1, pulled 1, conflicts 1.
-Review conflicts with `tock sync conflicts`.
+Review conflicts with `brega sync conflicts`.
 ```
 
 List and resolve it:
 
 ```sh
-tock sync conflicts
+brega sync conflicts
 # Unresolved conflicts:
 #   [<id>] task <entity> — <detail>
-# Resolve with `tock sync resolve <id>`.
+# Resolve with `brega sync resolve <id>`.
 
-tock sync resolve <id>
+brega sync resolve <id>
 # Resolved conflict <id>.
 
-tock sync conflicts
+brega sync conflicts
 # No unresolved conflicts.
 ```
 
 ## 6. Pair the Apple app (coming soon)
 
-> **Status: not yet shipped.** The `tock-uniffi` crate provides the
+> **Status: not yet shipped.** The `brega-uniffi` crate provides the
 > Rust↔Swift bindings, but the SwiftUI app for iOS / iPadOS / macOS /
 > watchOS is still in progress. This section describes the intended flow so
 > you know what to expect.

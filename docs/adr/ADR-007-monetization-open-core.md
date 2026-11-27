@@ -5,7 +5,7 @@
 
 ## Context
 
-Tock must sustain a 1–2 person team indefinitely without betraying its privacy-first, open-source ethos. Options:
+Brega must sustain a 1–2 person team indefinitely without betraying its privacy-first, open-source ethos. Options:
 
 - **A: Fully open source, no monetization** → Unsustainable (relies on donations, which historically fail for productivity tools).
 - **B: Open core + paid hosted sync** → Server is AGPL; hosted sync is a paid service; all client code is free.

@@ -1,0 +1,53 @@
+[package]
+name = "brega-server"
+description = "Optional sync server for brega (AGPL-3.0). Stores only end-to-end-encrypted blobs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Server is AGPL-3.0-only — see crate-local LICENSE.
+license = "AGPL-3.0-only"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+# brega-server has its own distribution path (Docker image, hand-built
+# release artifacts) and uses a different license. Exclude it from
+# cargo-dist so the CLI release plan doesn't accidentally ship it.
+[package.metadata.dist]
+dist = false
+
+[[bin]]
+name = "brega-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+brega-sync = { workspace = true }
+brega-crypto = { workspace = true }
+# Public vault-header parsing for register-time validation (issue #199). The
+# server reads only PUBLIC header fields (vault_id, format/version) — never key
+# material. Apache-2.0 core consumed by the AGPL-3.0 server is compatible.
+brega-core = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+# NFKC + case normalization of login identifiers (issue #199).
+unicode-normalization = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+reqwest = { workspace = true }
