@@ -7,14 +7,16 @@
 //! offline merge of disjoint edits, and that the wire frames carry no
 //! plaintext.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::path::Path;
 
+use brega_core::domain::area::NewArea;
 use brega_core::domain::task::{NewTask, Priority, TaskPatch};
 use brega_core::domain::urgency::UrgencyConfig;
+use brega_core::event::EventOp;
 use brega_core::vault::VaultKey;
-use brega_storage::repo::task_repo;
+use brega_storage::repo::{area_repo, task_repo};
 use brega_storage::sync;
 use brega_storage::vault::{self, OpenVault};
 
@@ -248,4 +250,169 @@ fn concurrent_same_field_edits_surface_a_conflict() {
         conflicts_a.len() - 1,
         "resolving a conflict should remove exactly one from the review list"
     );
+}
+
+// ── Mixed-version sync safety (R-13) ─────────────────────────────────
+//
+// A "newer build" is simulated by adding a nullable column to device A's
+// table, as an additive migration would.
+
+fn task_ids_on(v: &OpenVault) -> Vec<uuid::Uuid> {
+    task_repo::list(v.connection(), false)
+        .expect("list")
+        .into_iter()
+        .map(|t| t.id)
+        .collect()
+}
+
+#[test]
+fn older_device_applies_known_columns_of_newer_events() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    let task = task_repo::insert(
+        a.connection(),
+        &NewTask {
+            title: "old title".into(),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("insert");
+    ship(&a, &b);
+    ship(&b, &a);
+
+    a.connection()
+        .execute_batch("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER")
+        .expect("migrate a");
+    a.connection()
+        .execute(
+            "UPDATE tasks SET title = 'new title', estimate_minutes = 90 WHERE id = ?1",
+            [task.id.as_bytes().to_vec()],
+        )
+        .expect("edit a");
+    let created = task_repo::insert(
+        a.connection(),
+        &NewTask {
+            title: "created on newer build".into(),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("insert newer");
+
+    ship(&a, &b);
+
+    let on_b = task_repo::get_by_id(b.connection(), task.id)
+        .expect("get")
+        .expect("present");
+    assert_eq!(on_b.title, "new title");
+    assert!(
+        task_repo::get_by_id(b.connection(), created.id)
+            .expect("get")
+            .is_some(),
+        "a create carrying an unknown column must still materialize"
+    );
+    assert!(
+        sync::list_conflicts(b.connection())
+            .expect("list")
+            .is_empty(),
+        "unknown columns must not surface as conflicts"
+    );
+    assert!(
+        sync::collect_local_changes(&b)
+            .expect("collect b")
+            .is_empty(),
+        "ingesting newer events must not make the older device re-emit them"
+    );
+    assert_eq!(task_ids_on(&b).len(), 2);
+}
+
+#[test]
+fn unknown_columns_round_trip_through_an_older_device() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    let area = area_repo::insert(
+        a.connection(),
+        &NewArea {
+            name: "home".into(),
+            color: None,
+        },
+    )
+    .expect("insert area");
+    ship(&a, &b);
+    ship(&b, &a);
+
+    a.connection()
+        .execute_batch("ALTER TABLE areas ADD COLUMN weekly_budget_minutes INTEGER")
+        .expect("migrate a");
+    a.connection()
+        .execute(
+            "UPDATE areas SET weekly_budget_minutes = 180 WHERE id = ?1",
+            [area.id.as_bytes().to_vec()],
+        )
+        .expect("set budget");
+    ship(&a, &b);
+
+    // The older device edits the row; `areas` materializes with INSERT OR
+    // REPLACE, so the budget survives only if B's event carries it.
+    area_repo::archive(b.connection(), area.id).expect("archive on b");
+    ship(&b, &a);
+
+    let (budget, archived): (Option<i64>, Option<String>) = a
+        .connection()
+        .query_row(
+            "SELECT weekly_budget_minutes, archived_at FROM areas WHERE id = ?1",
+            [area.id.as_bytes().to_vec()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read area");
+    assert_eq!(budget, Some(180), "newer column must round-trip");
+    assert!(archived.is_some(), "older device's edit must apply");
+    assert!(
+        sync::list_conflicts(a.connection())
+            .expect("list")
+            .is_empty()
+    );
+}
+
+#[test]
+fn adding_a_nullable_column_emits_no_update_storm() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    for title in ["one", "two", "three"] {
+        task_repo::insert(
+            a.connection(),
+            &NewTask {
+                title: title.into(),
+                ..NewTask::default()
+            },
+            &UrgencyConfig::default(),
+        )
+        .expect("insert");
+    }
+    ship(&a, &b);
+    ship(&b, &a);
+    assert!(sync::collect_local_changes(&a).expect("settled").is_empty());
+
+    a.connection()
+        .execute_batch("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER")
+        .expect("migrate a");
+    assert!(
+        sync::collect_local_changes(&a).expect("collect").is_empty(),
+        "upgrading must not emit an Update for every unchanged row"
+    );
+
+    let id = task_ids_on(&a)[0];
+    a.connection()
+        .execute(
+            "UPDATE tasks SET estimate_minutes = 45 WHERE id = ?1",
+            [id.as_bytes().to_vec()],
+        )
+        .expect("set estimate");
+    let events = sync::collect_local_changes(&a).expect("collect");
+    assert_eq!(events.len(), 1);
+    match &events[0].event.op {
+        EventOp::Update { fields } => assert_eq!(fields, &vec!["estimate_minutes".to_string()]),
+        other => panic!("expected an update, got {other:?}"),
+    }
 }

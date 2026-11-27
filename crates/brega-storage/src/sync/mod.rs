@@ -15,8 +15,9 @@ mod registry;
 mod row;
 mod state;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -242,6 +243,7 @@ pub fn collect_local_changes(vault: &OpenVault) -> Result<Vec<SignedEvent>, Erro
     let mut produced = Vec::new();
 
     for table in registry::TABLES {
+        let local_cols = row::table_columns(conn, table)?;
         let snaps = row::snapshot_table(conn, table)?;
         let journal = state::load_journal(conn, table.kind)?;
         let mut seen: HashSet<Uuid> = HashSet::new();
@@ -272,8 +274,11 @@ pub fn collect_local_changes(vault: &OpenVault) -> Result<Vec<SignedEvent>, Erro
                     produced.push(signed);
                 }
                 Some(entry) if entry.content != snap.content => {
-                    let old_cols = row::decode_columns(&entry.content)?;
-                    let mut fields = row::changed_fields(&old_cols, &snap.columns);
+                    let Some((content, mut fields)) =
+                        diff_against_journal(conn, table.kind, snap, &entry.content, &local_cols)?
+                    else {
+                        continue;
+                    };
                     fields.retain(|f| !MERGE_IGNORE_FIELDS.contains(&f.as_str()));
                     let parent = state::load_heads(conn, table.kind, snap.sync_id)?
                         .first()
@@ -286,14 +291,14 @@ pub fn collect_local_changes(vault: &OpenVault) -> Result<Vec<SignedEvent>, Erro
                         table.kind,
                         snap.sync_id,
                         EventOp::Update { fields },
-                        &snap.content,
+                        &content,
                         parent,
                     )?;
                     state::put_journal(
                         conn,
                         table.kind,
                         snap.sync_id,
-                        &snap.content,
+                        &content,
                         signed.event.lamport,
                     )?;
                     state::set_heads(conn, table.kind, snap.sync_id, &[signed.event.id])?;
@@ -332,6 +337,67 @@ pub fn collect_local_changes(vault: &OpenVault) -> Result<Vec<SignedEvent>, Erro
 
     state::store_vector_clock(conn, &clock)?;
     Ok(produced)
+}
+
+/// An Update's payload frame and changed field names.
+type UpdateDiff = (Vec<u8>, Vec<String>);
+
+/// Compare a row whose bytes differ from its journal frame. Returns the
+/// Update payload and changed fields, or `None` when the difference is
+/// schema-only (see [`reconcile_with_journal`]); in that case the journal is
+/// rewritten so later collects take the byte-compare fast path.
+fn diff_against_journal(
+    conn: &Connection,
+    kind: EntityKind,
+    snap: &row::RowSnap,
+    journal_content: &[u8],
+    local_cols: &HashSet<String>,
+) -> Result<Option<UpdateDiff>, Error> {
+    let old_cols = row::decode_columns(journal_content)?;
+    let columns = reconcile_with_journal(&snap.columns, &old_cols, local_cols);
+    let content = row::encode_columns(&columns);
+    if content != journal_content {
+        let fields = row::changed_fields(&old_cols, &columns);
+        return Ok(Some((content, fields)));
+    }
+    let mut full = snap.columns.clone();
+    full.extend(
+        old_cols
+            .into_iter()
+            .filter(|(n, _)| !local_cols.contains(n)),
+    );
+    let full = row::encode_columns(&full);
+    if full != journal_content {
+        state::rewrite_journal_content(conn, kind, snap.sync_id, &full)?;
+    }
+    Ok(None)
+}
+
+/// Bring a current-row snapshot in line with its last-emitted journal frame
+/// so schema differences between builds don't read as edits (R-13):
+///
+/// - a column absent from the journal frame and NULL now is unchanged (a
+///   newly migrated nullable column), so upgrading emits no Update storm;
+/// - a column the journal frame carries but the local schema lacks (written
+///   by a newer build) is kept, so it round-trips back to newer devices.
+fn reconcile_with_journal(
+    current: &[(String, Value)],
+    journal: &[(String, Value)],
+    local_cols: &HashSet<String>,
+) -> Vec<(String, Value)> {
+    let in_journal = |name: &str| journal.iter().any(|(n, _)| n == name);
+    let mut out: Vec<(String, Value)> = current
+        .iter()
+        .filter(|(n, v)| !matches!(v, Value::Null) || in_journal(n))
+        .cloned()
+        .collect();
+    out.extend(
+        journal
+            .iter()
+            .filter(|(n, _)| !local_cols.contains(n))
+            .cloned(),
+    );
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -378,6 +444,7 @@ pub fn ingest_events(vault: &OpenVault, events: &[SignedEvent]) -> Result<Ingest
     let log = EventLog::new(vault);
     let mut clock = state::load_vector_clock(conn)?;
     let mut summary = IngestSummary::default();
+    let mut schemas = SchemaCache::default();
 
     for signed in events {
         if event_log::event_exists(conn, signed.event.id)? {
@@ -406,8 +473,8 @@ pub fn ingest_events(vault: &OpenVault, events: &[SignedEvent]) -> Result<Ingest
         clock = result.merged_clock.clone();
 
         if !matches!(result.action, IngestAction::Discard) {
-            materialize(conn, signed, &plaintext, &result.action)?;
-            refresh_journal(conn, signed)?;
+            materialize(conn, &mut schemas, signed, &plaintext, &result.action)?;
+            refresh_journal(conn, &mut schemas, signed, &plaintext)?;
         }
 
         event_log::insert_event(conn, signed)?;
@@ -428,8 +495,27 @@ pub fn ingest_events(vault: &OpenVault, events: &[SignedEvent]) -> Result<Ingest
     Ok(summary)
 }
 
+/// Per-ingest cache of each table's local column set.
+#[derive(Default)]
+struct SchemaCache(HashMap<&'static str, HashSet<String>>);
+
+impl SchemaCache {
+    fn columns(
+        &mut self,
+        conn: &Connection,
+        table: &'static registry::SyncTable,
+    ) -> Result<&HashSet<String>, Error> {
+        if !self.0.contains_key(table.table) {
+            let cols = row::table_columns(conn, table)?;
+            self.0.insert(table.table, cols);
+        }
+        Ok(&self.0[table.table])
+    }
+}
+
 fn materialize(
     conn: &Connection,
+    schemas: &mut SchemaCache,
     signed: &SignedEvent,
     plaintext: &[u8],
     action: &IngestAction,
@@ -456,6 +542,13 @@ fn materialize(
                 IngestAction::MergeFields { .. } => merge_fields(conn, table, signed, &incoming)?,
                 _ => incoming,
             };
+            // Columns from a newer schema are not materialized here; they
+            // are carried in the journal frame instead (see refresh_journal).
+            let known = schemas.columns(conn, table)?;
+            let merged: Vec<(String, Value)> = merged
+                .into_iter()
+                .filter(|(n, _)| known.contains(n))
+                .collect();
             if let Err(e) = row::upsert_row(conn, table, &merged) {
                 // Constraint violations (e.g. UNIQUE tag name) become a
                 // recorded conflict rather than aborting the whole sync.
@@ -501,7 +594,14 @@ fn merge_fields(
 
 /// After materializing a remote event, rewrite the journal entry from the
 /// now-current row so the next outbound collect does not re-emit it.
-fn refresh_journal(conn: &Connection, signed: &SignedEvent) -> Result<(), Error> {
+/// Columns the local schema lacks are kept in the frame (the incoming
+/// event's values over those already journaled) so they round-trip.
+fn refresh_journal(
+    conn: &Connection,
+    schemas: &mut SchemaCache,
+    signed: &SignedEvent,
+    plaintext: &[u8],
+) -> Result<(), Error> {
     let Some(table) = registry::table_for(signed.event.entity_kind) else {
         return Ok(());
     };
@@ -515,24 +615,45 @@ fn refresh_journal(conn: &Connection, signed: &SignedEvent) -> Result<(), Error>
             // Re-snapshot via the registry by scanning for the row whose
             // derived sync id matches. For uuid-keyed tables this is the
             // common path; the scan is over a single entity kind.
-            if let Some(content) = current_content(conn, table, entity_id)? {
-                state::put_journal(conn, kind, entity_id, &content, signed.event.lamport)?;
+            let Some(mut columns) = current_columns(conn, table, entity_id)? else {
+                return Ok(());
+            };
+            let known = schemas.columns(conn, table)?;
+            let mut extras: Vec<(String, Value)> =
+                match state::load_journal_entry(conn, kind, entity_id)? {
+                    Some(entry) => row::decode_columns(&entry.content)?
+                        .into_iter()
+                        .filter(|(n, _)| !known.contains(n))
+                        .collect(),
+                    None => Vec::new(),
+                };
+            for (name, value) in row::decode_columns(plaintext)? {
+                if known.contains(&name) {
+                    continue;
+                }
+                match extras.iter_mut().find(|(n, _)| *n == name) {
+                    Some(slot) => slot.1 = value,
+                    None => extras.push((name, value)),
+                }
             }
+            columns.extend(extras);
+            let content = row::encode_columns(&columns);
+            state::put_journal(conn, kind, entity_id, &content, signed.event.lamport)?;
         }
     }
     Ok(())
 }
 
-/// Find the canonical content frame of the row whose derived sync id is
-/// `sync_id`, by scanning the table's current rows.
-fn current_content(
+/// Find the synced columns of the row whose derived sync id is `sync_id`,
+/// by scanning the table's current rows.
+fn current_columns(
     conn: &Connection,
     table: &registry::SyncTable,
     sync_id: Uuid,
-) -> Result<Option<Vec<u8>>, Error> {
+) -> Result<Option<Vec<(String, Value)>>, Error> {
     for snap in row::snapshot_table(conn, table)? {
         if snap.sync_id == sync_id {
-            return Ok(Some(snap.content));
+            return Ok(Some(snap.columns));
         }
     }
     Ok(None)

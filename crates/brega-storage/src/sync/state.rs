@@ -161,6 +161,22 @@ pub fn load_journal(
     Ok(out)
 }
 
+/// Load one entity's journal entry, if any.
+pub fn load_journal_entry(
+    conn: &Connection,
+    kind: EntityKind,
+    entity_id: Uuid,
+) -> Result<Option<JournalEntry>, Error> {
+    let content: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT content FROM sync_journal WHERE entity_kind = ?1 AND entity_id = ?2",
+            params![kind.as_str(), entity_id.as_bytes().to_vec()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(content.map(|content| JournalEntry { content }))
+}
+
 /// Upsert one journal entry.
 pub fn put_journal(
     conn: &Connection,
@@ -181,6 +197,21 @@ pub fn put_journal(
             content,
             lamport_i
         ],
+    )?;
+    Ok(())
+}
+
+/// Replace an existing journal entry's content, keeping its lamport (for
+/// a schema-only change that emitted no event).
+pub fn rewrite_journal_content(
+    conn: &Connection,
+    kind: EntityKind,
+    entity_id: Uuid,
+    content: &[u8],
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE sync_journal SET content = ?3 WHERE entity_kind = ?1 AND entity_id = ?2",
+        params![kind.as_str(), entity_id.as_bytes().to_vec(), content],
     )?;
     Ok(())
 }
