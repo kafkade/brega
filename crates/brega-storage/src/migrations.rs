@@ -102,6 +102,21 @@ pub const ALL: &[Migration] = &[
         name: "app_state",
         sql: include_str!("migrations/0015_app_state.sql"),
     },
+    Migration {
+        version: 16,
+        name: "task_estimate",
+        sql: include_str!("migrations/0016_task_estimate.sql"),
+    },
+    Migration {
+        version: 17,
+        name: "area_budget",
+        sql: include_str!("migrations/0017_area_budget.sql"),
+    },
+    Migration {
+        version: 18,
+        name: "task_reschedules",
+        sql: include_str!("migrations/0018_task_reschedules.sql"),
+    },
 ];
 
 /// Compute the sha-256 hex digest of `sql`.
@@ -153,6 +168,13 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, Error> {
         }
     }
 
+    // Sync bookkeeping exists from migration 11 on. Snapshot the synced
+    // tables' columns before upgrading so the next sync can fill columns
+    // this upgrade adds from values other devices already sent (R-13).
+    if current >= 11 && ALL.iter().any(|m| m.version > current) {
+        crate::sync::record_column_baseline(conn)?;
+    }
+
     for m in ALL {
         if m.version <= current {
             continue;
@@ -176,4 +198,110 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, Error> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap_or(0);
     Ok(final_v)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+
+    /// Apply migrations up to and including `version`, as an older build would.
+    fn migrate_to(conn: &mut Connection, version: u32) {
+        for m in ALL.iter().take_while(|m| m.version <= version) {
+            let tx = conn.transaction().expect("tx");
+            tx.execute_batch(m.sql).expect("apply");
+            tx.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at, checksum)
+                 VALUES (?1, ?2, '2026-01-01T00:00:00Z', ?3)",
+                params![m.version, m.name, checksum(m.sql)],
+            )
+            .expect("record");
+            tx.execute_batch(&format!("PRAGMA user_version = {};", m.version))
+                .expect("version");
+            tx.commit().expect("commit");
+        }
+    }
+
+    fn dump(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut stmt = conn.prepare(sql).expect("prepare");
+        let n = stmt.column_count();
+        stmt.query_map([], |r| {
+            (0..n)
+                .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                .collect()
+        })
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows")
+    }
+
+    #[test]
+    fn planning_migrations_keep_existing_rows_unchanged() {
+        let mut conn = Connection::open_in_memory().expect("open");
+        migrate_to(&mut conn, 15);
+        conn.execute_batch(
+            "INSERT INTO areas (id, name, sort_order, created_at, modified_at)
+             VALUES (x'01', 'home', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO tasks (id, sid, title, status, area_id, scheduled_for, udas,
+                                urgency_cache, created_at, modified_at)
+             VALUES (x'02', 1, 'fix sink', 'pending', x'01', '2026-06-01', '{}', 1.5,
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("seed v15");
+        let tasks_before = dump(&conn, "SELECT * FROM tasks");
+        let areas_before = dump(&conn, "SELECT * FROM areas");
+
+        assert_eq!(migrate(&mut conn).expect("migrate"), 18);
+
+        let tasks_after = dump(
+            &conn,
+            "SELECT * FROM tasks", // new column is appended last
+        );
+        assert_eq!(tasks_after[0][..tasks_before[0].len()], tasks_before[0][..]);
+        assert_eq!(
+            tasks_after[0].last(),
+            Some(&rusqlite::types::Value::Null),
+            "estimate starts unset"
+        );
+        let areas_after = dump(&conn, "SELECT * FROM areas");
+        assert_eq!(areas_after[0][..areas_before[0].len()], areas_before[0][..]);
+        assert_eq!(areas_after[0].last(), Some(&rusqlite::types::Value::Null));
+        assert!(dump(&conn, "SELECT * FROM task_reschedules").is_empty());
+    }
+
+    #[test]
+    fn planning_columns_reject_non_positive_values() {
+        let mut conn = Connection::open_in_memory().expect("open");
+        migrate(&mut conn).expect("migrate");
+        for sql in [
+            "INSERT INTO areas (id, name, sort_order, weekly_budget_minutes, created_at, modified_at)
+             VALUES (x'01', 'a', 0, 0, 't', 't')",
+            "INSERT INTO tasks (id, sid, title, status, udas, urgency_cache, estimate_minutes,
+                                created_at, modified_at)
+             VALUES (x'02', 1, 't', 'inbox', '{}', 0, -5, 't', 't')",
+        ] {
+            assert!(conn.execute_batch(sql).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn upgrading_records_the_pre_upgrade_column_baseline() {
+        let mut conn = Connection::open_in_memory().expect("open");
+        migrate_to(&mut conn, 15);
+        migrate(&mut conn).expect("migrate");
+        let tasks: String = conn
+            .query_row(
+                "SELECT value FROM sync_state WHERE key = 'known_columns:tasks'",
+                [],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .map(|v| String::from_utf8(v).expect("utf8"))
+            .expect("baseline recorded");
+        assert!(tasks.split(',').any(|c| c == "title"));
+        assert!(
+            !tasks.split(',').any(|c| c == "estimate_minutes"),
+            "baseline is the schema before this upgrade"
+        );
+    }
 }

@@ -27,6 +27,7 @@
 mod account;
 mod convert;
 mod error;
+mod planning;
 mod types;
 mod workspace;
 
@@ -35,6 +36,10 @@ pub use account::{
     account_signup_bundle, emergency_kit_text, parse_setup_code,
 };
 pub use error::BregaError;
+pub use planning::{
+    BregaAreaReview, BregaReviewWeek, BregaWeeklyReview, format_duration_minutes,
+    parse_duration_minutes,
+};
 pub use types::*;
 pub use workspace::{
     PairingAcceptSession, PairingInviteSession, Workspace, begin_pairing_accept, init_workspace,
@@ -152,6 +157,7 @@ mod tests {
             evening: false,
             udas: "{}".into(),
             tags: vec!["errands".into()],
+            estimate_minutes: None,
         };
         let task = ws.add_task(input).expect("add task");
         assert_eq!(task.title, "Buy groceries");
@@ -189,6 +195,7 @@ mod tests {
             evening: false,
             udas: "{}".into(),
             tags: vec![],
+            estimate_minutes: None,
         };
         let task = ws.add_task(input).expect("add task");
 
@@ -218,6 +225,8 @@ mod tests {
             remove_tags: vec![],
             add_deps: vec![],
             remove_deps: vec![],
+            estimate_minutes: None,
+            clear_estimate: false,
         };
         let updated = ws.modify_task(task.sid, patch).expect("modify task");
         assert_eq!(updated.title, "Updated");
@@ -250,6 +259,7 @@ mod tests {
         let input = BregaNewArea {
             name: "Health".into(),
             color: Some("#00FF00".into()),
+            weekly_budget_minutes: None,
         };
         let area = ws.add_area(input).expect("add area");
         assert_eq!(area.name, "Health");
@@ -377,6 +387,7 @@ mod tests {
             evening: false,
             udas: "{}".into(),
             tags: vec!["alpha".into(), "beta".into()],
+            estimate_minutes: None,
         };
         ws.add_task(input).expect("add task");
 
@@ -385,5 +396,104 @@ mod tests {
         let names: Vec<&str> = tags.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"alpha"));
         assert!(names.contains(&"beta"));
+    }
+
+    #[test]
+    fn duration_helpers_parse_and_format() {
+        assert_eq!(parse_duration_minutes("1h30m").expect("parse"), 90);
+        assert!(matches!(
+            parse_duration_minutes("0m"),
+            Err(BregaError::InvalidInput { .. })
+        ));
+        assert_eq!(format_duration_minutes(90), "1h30m");
+    }
+
+    #[test]
+    fn weekly_review_reflects_estimates_budgets_and_timers() {
+        use time::format_description::well_known::Rfc3339;
+        use time::{Duration, OffsetDateTime, Time};
+
+        let (_dir, ws) = temp_workspace();
+        let area = ws
+            .add_area(BregaNewArea {
+                name: "work".into(),
+                color: None,
+                weekly_budget_minutes: None,
+            })
+            .expect("area");
+        let area = ws
+            .update_area(
+                area.id,
+                BregaAreaPatch {
+                    name: None,
+                    color: None,
+                    clear_color: false,
+                    weekly_budget_minutes: Some(parse_duration_minutes("10h").expect("10h")),
+                    clear_budget: false,
+                },
+            )
+            .expect("budget");
+        assert_eq!(area.weekly_budget_minutes, Some(600));
+
+        let now = OffsetDateTime::now_utc();
+        let today = now.date();
+        let monday = today - Duration::days(i64::from(today.weekday().number_days_from_monday()));
+        let start = monday.with_time(Time::MIDNIGHT).assume_utc();
+        let task = ws
+            .add_task(BregaNewTask {
+                title: "write spec".into(),
+                notes: None,
+                status: None,
+                project_id: None,
+                area_id: Some(area.id.clone()),
+                heading_id: None,
+                start_date: None,
+                deadline: None,
+                scheduled_for: Some(today.to_string()),
+                recurrence: None,
+                priority: None,
+                evening: false,
+                udas: "{}".into(),
+                tags: vec![],
+                estimate_minutes: Some(90),
+            })
+            .expect("task");
+        assert_eq!(task.estimate_minutes, Some(90));
+        ws.start_timer(BregaNewTimeBlock {
+            title: "spec".into(),
+            task_sid: Some(task.sid),
+            project_id: None,
+            notes: None,
+        })
+        .expect("timer");
+
+        let fmt = |t: OffsetDateTime| t.format(&Rfc3339).expect("fmt");
+        let review = ws
+            .weekly_review(BregaReviewWeek {
+                monday: monday.to_string(),
+                start: fmt(start),
+                end: fmt(start + Duration::weeks(1)),
+                today: today.to_string(),
+                now: fmt(now + Duration::minutes(5)),
+            })
+            .expect("review");
+        assert_eq!(review.monday, monday.to_string());
+        let row = &review.areas[0];
+        assert_eq!(row.area_id.as_deref(), Some(area.id.as_str()));
+        assert_eq!(row.budget_minutes, Some(600));
+        assert_eq!(row.planned_minutes, 90);
+        assert!(!row.zero_planned);
+        assert!(row.tracked_seconds >= 299, "running timer counts up to now");
+
+        assert!(matches!(
+            ws.weekly_review(BregaReviewWeek {
+                monday: today.next_day().map(|d| d.to_string()).unwrap_or_default(),
+                start: fmt(start),
+                end: fmt(start),
+                today: today.to_string(),
+                now: fmt(now),
+            }),
+            Err(BregaError::InvalidInput { .. })
+        ));
     }
 }

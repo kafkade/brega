@@ -236,6 +236,7 @@ pub fn clear_binding(vault: &OpenVault) -> Result<(), Error> {
 /// - [`Error::Crypto`] / [`Error::Sqlite`] on append failure.
 pub fn collect_local_changes(vault: &OpenVault) -> Result<Vec<SignedEvent>, Error> {
     let conn = vault.connection();
+    hydrate_new_columns(conn)?;
     let log = EventLog::new(vault);
     let device = DeviceId::from_bytes(vault.local_device().device_id);
     let mut clock = state::load_vector_clock(conn)?;
@@ -342,6 +343,72 @@ pub fn collect_local_changes(vault: &OpenVault) -> Result<Vec<SignedEvent>, Erro
 /// An Update's payload frame and changed field names.
 type UpdateDiff = (Vec<u8>, Vec<String>);
 
+/// `sync_state` key prefix for the column set each synced table had when
+/// sync last ran.
+const KEY_KNOWN_COLUMNS_PREFIX: &str = "known_columns:";
+
+/// Record each synced table's current column set as the hydration baseline,
+/// where none is recorded yet.
+///
+/// [`crate::migrations::migrate`] calls this before applying pending
+/// migrations, so the first sync after an upgrade knows which columns the
+/// upgrade added.
+///
+/// # Errors
+/// [`Error::Sqlite`] on query or write failure.
+pub fn record_column_baseline(conn: &Connection) -> Result<(), Error> {
+    for table in registry::TABLES {
+        let key = format!("{KEY_KNOWN_COLUMNS_PREFIX}{}", table.table);
+        if state::get_state(conn, &key)?.is_none() {
+            state::set_state_str(conn, &key, &column_list(conn, table)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn column_list(conn: &Connection, table: &registry::SyncTable) -> Result<String, Error> {
+    let cols = row::table_columns(conn, table)?;
+    let mut sorted: Vec<&str> = cols.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    Ok(sorted.join(","))
+}
+
+/// After an upgrade adds columns, fill them from values a newer device
+/// already sent, which the journal kept while this build couldn't store
+/// them (R-13). Without this, the next collect would see the new column
+/// as NULL and emit an Update clearing the value on every device.
+///
+/// Only columns new since the last sync run are filled, and only where the
+/// row is still NULL, so local edits made on this build are never undone.
+fn hydrate_new_columns(conn: &Connection) -> Result<(), Error> {
+    for table in registry::TABLES {
+        let key = format!("{KEY_KNOWN_COLUMNS_PREFIX}{}", table.table);
+        let current = column_list(conn, table)?;
+        let Some(recorded) = state::get_state_str(conn, &key)? else {
+            state::set_state_str(conn, &key, &current)?;
+            continue;
+        };
+        if recorded == current {
+            continue;
+        }
+        let known: HashSet<&str> = recorded.split(',').collect();
+        let added: HashSet<&str> = current.split(',').filter(|c| !known.contains(c)).collect();
+        if !added.is_empty() {
+            for entry in state::load_journal(conn, table.kind)?.values() {
+                let cols = row::decode_columns(&entry.content)?;
+                let key_cols = row::key_columns_of(table, &cols)?;
+                for (name, value) in &cols {
+                    if added.contains(name.as_str()) && !matches!(value, Value::Null) {
+                        row::fill_null_column(conn, table, &key_cols, name, value)?;
+                    }
+                }
+            }
+        }
+        state::set_state_str(conn, &key, &current)?;
+    }
+    Ok(())
+}
+
 /// Compare a row whose bytes differ from its journal frame. Returns the
 /// Update payload and changed fields, or `None` when the difference is
 /// schema-only (see [`reconcile_with_journal`]); in that case the journal is
@@ -441,6 +508,7 @@ pub struct IngestSummary {
 /// - [`Error::Sqlite`] on persistence failure.
 pub fn ingest_events(vault: &OpenVault, events: &[SignedEvent]) -> Result<IngestSummary, Error> {
     let conn = vault.connection();
+    hydrate_new_columns(conn)?;
     let log = EventLog::new(vault);
     let mut clock = state::load_vector_clock(conn)?;
     let mut summary = IngestSummary::default();

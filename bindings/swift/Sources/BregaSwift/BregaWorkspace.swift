@@ -286,6 +286,29 @@ public final class BregaWorkspace: @unchecked Sendable {
         try await perform { try $0.listAreas() }
     }
 
+    /// Get one area by UUID (archived areas included).
+    public func getArea(id: String) async throws -> BregaArea? {
+        try await perform { try $0.getArea(id: id) }
+    }
+
+    /// Rename, recolor, or set/clear an area's weekly budget.
+    public func updateArea(id: String, patch: BregaAreaPatch) async throws -> BregaArea {
+        try await perform { try $0.updateArea(id: id, patch: patch) }
+    }
+
+    /// Archive an area.
+    public func archiveArea(id: String) async throws {
+        try await perform { try $0.archiveArea(id: id) }
+    }
+
+    // MARK: - Weekly Review
+
+    /// Compute the Weekly Review. Build `week` with
+    /// ``BregaReviewWeek/containing(_:calendar:)``.
+    public func weeklyReview(_ week: BregaReviewWeek) async throws -> BregaWeeklyReview {
+        try await perform { try $0.weeklyReview(week: week) }
+    }
+
     // MARK: - Tags
 
     /// List all tags.

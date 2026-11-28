@@ -289,4 +289,47 @@ final class BregaSwiftTests: XCTestCase {
         let remaining = try await ws.listHabits()
         XCTAssertTrue(remaining.isEmpty)
     }
+
+    // MARK: - Planning
+
+    func testWeeklyReviewWithBudgetAndEstimate() async throws {
+        let (ws, _) = try await BregaWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let area = try await ws.addArea(BregaNewArea(name: "Work", color: nil))
+        let budgeted = try await ws.updateArea(
+            id: area.id,
+            patch: BregaAreaPatch(weeklyBudgetMinutes: try parseDurationMinutes(text: "10h"))
+        )
+        XCTAssertEqual(budgeted.weeklyBudgetMinutes, 600)
+
+        let week = try XCTUnwrap(BregaReviewWeek.containing())
+        _ = try await ws.addTask(
+            BregaNewTask(
+                title: "Write spec", notes: nil, status: nil, projectId: nil, areaId: area.id,
+                headingId: nil, startDate: nil, deadline: nil, scheduledFor: week.today,
+                recurrence: nil, priority: nil, evening: false, udas: "{}", tags: [],
+                estimateMinutes: 90
+            )
+        )
+        let review = try await ws.weeklyReview(week)
+        let row = try XCTUnwrap(review.areas.first)
+        XCTAssertEqual(row.areaId, area.id)
+        XCTAssertEqual(row.budgetMinutes, 600)
+        XCTAssertEqual(row.plannedMinutes, 90)
+        XCTAssertFalse(row.zeroPlanned)
+        XCTAssertEqual(formatDurationMinutes(minutes: 90), "1h30m")
+    }
+
+    func testReviewWeekFollowsLocalDST() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let parse = ISO8601DateFormatter()
+        parse.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let wednesday = try XCTUnwrap(parse.date(from: "2026-03-04T15:00:00.000Z"))
+        let week = try XCTUnwrap(BregaReviewWeek.containing(wednesday, calendar: calendar))
+        XCTAssertEqual(week.monday, "2026-03-02")
+        let start = try XCTUnwrap(parse.date(from: week.start))
+        let end = try XCTUnwrap(parse.date(from: week.end))
+        XCTAssertEqual(end.timeIntervalSince(start), 167 * 3600, "spring-forward week")
+        XCTAssertEqual(week.today, "2026-03-04")
+    }
 }

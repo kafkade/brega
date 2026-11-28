@@ -892,6 +892,7 @@ dependencies = [
  "brega-crypto",
  "brega-storage",
  "brega-sync",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

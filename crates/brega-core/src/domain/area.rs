@@ -17,6 +17,8 @@ pub struct Area {
     pub color: Option<String>,
     /// Sort position.
     pub sort_order: i32,
+    /// Weekly time budget in minutes (`None` = no budget).
+    pub weekly_budget_minutes: Option<u32>,
     /// When created.
     pub created_at: OffsetDateTime,
     /// When last modified.
@@ -32,4 +34,18 @@ pub struct NewArea {
     pub name: String,
     /// Display color.
     pub color: Option<String>,
+    /// Weekly time budget in minutes (must be > 0; `None` = no budget).
+    pub weekly_budget_minutes: Option<u32>,
+}
+
+/// Fields that can be changed on an existing area. `None` leaves a field
+/// unchanged; `Some(None)` clears a clearable field.
+#[derive(Clone, Debug, Default)]
+pub struct AreaPatch {
+    /// New name.
+    pub name: Option<String>,
+    /// New display color.
+    pub color: Option<Option<String>>,
+    /// New weekly budget in minutes (must be > 0).
+    pub weekly_budget_minutes: Option<Option<u32>>,
 }

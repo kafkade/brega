@@ -415,6 +415,7 @@ mod tests {
             scheduled_for: None,
             recurrence: None,
             priority: Some(Priority::High),
+            estimate_minutes: None,
             evening: true,
             udas: UdaValues::default(),
             tags: vec!["groceries".into(), "errands".into()],

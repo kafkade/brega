@@ -264,6 +264,7 @@ mod tests {
             scheduled_for: None,
             recurrence: None,
             priority: Some(Priority::High),
+            estimate_minutes: None,
             evening: false,
             udas: {
                 let mut values = UdaValues::default();

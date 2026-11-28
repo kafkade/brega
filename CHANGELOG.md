@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Task effort estimates** (#228): tasks take an optional estimate entered as
+  `90m`, `2h`, or `1h30m`; zero, negative, and malformed values are rejected.
+  Estimates sync between devices and carry over to the next instance of a
+  recurring task.
+- **Area weekly budgets** (#229): areas can be renamed, recolored, archived, and
+  given an optional weekly time budget (no budget unless set).
+- **Reschedule history** (#230): each time a task's planned day or due date
+  moves to a later day it is recorded, and moves made on two devices at once are
+  both kept.
+- **Weekly Review data** (#231): per area for the current ISO week in the local
+  time zone — budget, tracked time, planned time from estimates, unestimated,
+  overdue, and slipped tasks, and high-priority tasks with no planned day.
+  Correct across DST changes and for timers spanning midnight or the week
+  boundary.
+
 ### Changed
 
 - **Renamed tock → brega** (#226): crates (`brega-*`), binaries (`brega`, `brega-server`), environment variables (`BREGA_*`), config directory, vault/backup file extensions (`.bregavault`, `.bregabak`), Swift modules (`BregaFFI`, `BregaSwift`), and docs. On-disk and cryptographic labels (HKDF/AAD strings, backup magic, `TOCK1:` setup codes, server database filenames) are unchanged until vault format v3 (#233), so existing vaults keep opening.
@@ -26,7 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applies the columns it knows from a newer device's changes instead of
   dropping the whole update as a conflict, and keeps the columns it doesn't
   know so they survive its own edits. Adding a column in an upgrade no longer
-  re-sends every unchanged row.
+  re-sends every unchanged row, and values a newer device
+  sent are kept when the older device upgrades. Synced edits to an area no
+  longer risk detaching its tasks.
 - Lists ordered by time (annotations, time blocks, focus sessions) could show
   items out of order when a timestamp's fractional seconds ended in zero (most
   often on Windows); stored timestamps now sort chronologically.

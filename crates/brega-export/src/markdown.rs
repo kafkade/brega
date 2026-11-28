@@ -575,6 +575,7 @@ mod tests {
             scheduled_for: None,
             recurrence: None,
             priority: Some(Priority::High),
+            estimate_minutes: None,
             evening: false,
             udas: UdaValues::default(),
             tags: vec!["dev".to_string(), "urgent".to_string()],

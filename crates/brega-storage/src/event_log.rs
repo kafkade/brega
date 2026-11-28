@@ -461,6 +461,7 @@ fn parse_kind(s: &str) -> Result<EntityKind, Error> {
         "tag" => EntityKind::Tag,
         "tag_link" => EntityKind::TagLink,
         "habit_skip" => EntityKind::HabitSkip,
+        "task_reschedule" => EntityKind::TaskReschedule,
         _ => return Err(Error::EventLogIntegrity),
     })
 }

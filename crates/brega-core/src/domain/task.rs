@@ -129,6 +129,8 @@ pub struct Task {
     pub recurrence: Option<String>,
     /// Priority level.
     pub priority: Option<Priority>,
+    /// Effort estimate in minutes (always > 0 when set).
+    pub estimate_minutes: Option<u32>,
     /// Whether this is an "evening" task.
     pub evening: bool,
     /// User-defined attributes (JSON key-value pairs).
@@ -180,6 +182,8 @@ pub struct NewTask {
     pub recurrence: Option<String>,
     /// Priority.
     pub priority: Option<Priority>,
+    /// Effort estimate in minutes (must be > 0).
+    pub estimate_minutes: Option<u32>,
     /// Evening flag.
     pub evening: bool,
     /// Initial UDA values.
@@ -211,6 +215,8 @@ pub struct TaskPatch {
     pub scheduled_for: Option<Option<String>>,
     /// New priority.
     pub priority: Option<Option<Priority>>,
+    /// New effort estimate in minutes (`Some(None)` clears it).
+    pub estimate_minutes: Option<Option<u32>>,
     /// New evening flag.
     pub evening: Option<bool>,
     /// UDA values to set (merged with existing values).
