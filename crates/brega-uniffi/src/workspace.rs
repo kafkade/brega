@@ -27,13 +27,15 @@ use brega_sync::transport::OnboardingBlob;
 use brega_sync::wire;
 use time::format_description::well_known::Rfc3339;
 
-use crate::convert::parse_optional_uuid;
+use crate::convert::{parse_optional_uuid, parse_uuid};
 use crate::error::BregaError;
+use crate::planning::{BregaReviewWeek, BregaWeeklyReview};
 use crate::types::{
-    BregaArea, BregaFocusSession, BregaHabit, BregaHabitEntry, BregaNewArea, BregaNewFocusSession,
-    BregaNewHabit, BregaNewProject, BregaNewTask, BregaNewTimeBlock, BregaPairingAcceptorInfo,
-    BregaPairingInvite, BregaProject, BregaSyncConflict, BregaSyncDeviceInfo, BregaSyncEventFrame,
-    BregaSyncIngestSummary, BregaTag, BregaTask, BregaTaskPatch, BregaTimeBlock,
+    BregaArea, BregaAreaPatch, BregaFocusSession, BregaHabit, BregaHabitEntry, BregaNewArea,
+    BregaNewFocusSession, BregaNewHabit, BregaNewProject, BregaNewTask, BregaNewTimeBlock,
+    BregaPairingAcceptorInfo, BregaPairingInvite, BregaProject, BregaSyncConflict,
+    BregaSyncDeviceInfo, BregaSyncEventFrame, BregaSyncIngestSummary, BregaTag, BregaTask,
+    BregaTaskPatch, BregaTimeBlock,
 };
 
 // ── Top-level constructors ───────────────────────────────────────────
@@ -504,6 +506,7 @@ impl Workspace {
         let core_input = NewArea {
             name: input.name,
             color: input.color,
+            weekly_budget_minutes: input.weekly_budget_minutes,
         };
         with_vault!(self, |conn| {
             brega_storage::repo::area_repo::insert(conn, &core_input)
@@ -518,6 +521,43 @@ impl Workspace {
             brega_storage::repo::area_repo::list(conn, false)
                 .map(|v| v.into_iter().map(Into::into).collect())
                 .map_err(Into::into)
+        })
+    }
+
+    /// Get one area by UUID (archived areas included).
+    pub fn get_area(&self, id: String) -> Result<Option<BregaArea>, BregaError> {
+        let id = parse_uuid(&id)?;
+        with_vault!(self, |conn| {
+            brega_storage::repo::area_repo::get_by_id(conn, id)
+                .map(|a| a.map(Into::into))
+                .map_err(Into::into)
+        })
+    }
+
+    /// Rename, recolor, or set/clear the weekly budget of an area.
+    pub fn update_area(&self, id: String, patch: BregaAreaPatch) -> Result<BregaArea, BregaError> {
+        let id = parse_uuid(&id)?;
+        let core_patch = patch.to_core();
+        with_vault!(self, |conn| {
+            brega_storage::repo::area_repo::update(conn, id, &core_patch)
+                .map(Into::into)
+                .map_err(Into::into)
+        })
+    }
+
+    /// Compute the Weekly Review for one ISO week (R-12).
+    pub fn weekly_review(&self, week: BregaReviewWeek) -> Result<BregaWeeklyReview, BregaError> {
+        let core_week = week.to_core()?;
+        with_vault!(self, |conn| {
+            crate::planning::compute_weekly_review(conn, &core_week)
+        })
+    }
+
+    /// Archive an area (hidden from `list_areas`; history is kept).
+    pub fn archive_area(&self, id: String) -> Result<(), BregaError> {
+        let id = parse_uuid(&id)?;
+        with_vault!(self, |conn| {
+            brega_storage::repo::area_repo::archive(conn, id).map_err(Into::into)
         })
     }
 

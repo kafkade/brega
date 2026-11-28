@@ -11,12 +11,12 @@
 
 use std::path::Path;
 
-use brega_core::domain::area::NewArea;
+use brega_core::domain::area::{AreaPatch, NewArea};
 use brega_core::domain::task::{NewTask, Priority, TaskPatch};
 use brega_core::domain::urgency::UrgencyConfig;
 use brega_core::event::EventOp;
 use brega_core::vault::VaultKey;
-use brega_storage::repo::{area_repo, task_repo};
+use brega_storage::repo::{area_repo, task_repo, task_reschedule_repo};
 use brega_storage::sync;
 use brega_storage::vault::{self, OpenVault};
 
@@ -282,11 +282,11 @@ fn older_device_applies_known_columns_of_newer_events() {
     ship(&b, &a);
 
     a.connection()
-        .execute_batch("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER")
+        .execute_batch("ALTER TABLE tasks ADD COLUMN future_points INTEGER")
         .expect("migrate a");
     a.connection()
         .execute(
-            "UPDATE tasks SET title = 'new title', estimate_minutes = 90 WHERE id = ?1",
+            "UPDATE tasks SET title = 'new title', future_points = 90 WHERE id = ?1",
             [task.id.as_bytes().to_vec()],
         )
         .expect("edit a");
@@ -336,6 +336,7 @@ fn unknown_columns_round_trip_through_an_older_device() {
         &NewArea {
             name: "home".into(),
             color: None,
+            weekly_budget_minutes: None,
         },
     )
     .expect("insert area");
@@ -343,14 +344,14 @@ fn unknown_columns_round_trip_through_an_older_device() {
     ship(&b, &a);
 
     a.connection()
-        .execute_batch("ALTER TABLE areas ADD COLUMN weekly_budget_minutes INTEGER")
+        .execute_batch("ALTER TABLE areas ADD COLUMN future_quota INTEGER")
         .expect("migrate a");
     a.connection()
         .execute(
-            "UPDATE areas SET weekly_budget_minutes = 180 WHERE id = ?1",
+            "UPDATE areas SET future_quota = 180 WHERE id = ?1",
             [area.id.as_bytes().to_vec()],
         )
-        .expect("set budget");
+        .expect("set quota");
     ship(&a, &b);
 
     // The older device edits the row; `areas` materializes with INSERT OR
@@ -358,15 +359,15 @@ fn unknown_columns_round_trip_through_an_older_device() {
     area_repo::archive(b.connection(), area.id).expect("archive on b");
     ship(&b, &a);
 
-    let (budget, archived): (Option<i64>, Option<String>) = a
+    let (quota, archived): (Option<i64>, Option<String>) = a
         .connection()
         .query_row(
-            "SELECT weekly_budget_minutes, archived_at FROM areas WHERE id = ?1",
+            "SELECT future_quota, archived_at FROM areas WHERE id = ?1",
             [area.id.as_bytes().to_vec()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("read area");
-    assert_eq!(budget, Some(180), "newer column must round-trip");
+    assert_eq!(quota, Some(180), "newer column must round-trip");
     assert!(archived.is_some(), "older device's edit must apply");
     assert!(
         sync::list_conflicts(a.connection())
@@ -395,7 +396,7 @@ fn adding_a_nullable_column_emits_no_update_storm() {
     assert!(sync::collect_local_changes(&a).expect("settled").is_empty());
 
     a.connection()
-        .execute_batch("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER")
+        .execute_batch("ALTER TABLE tasks ADD COLUMN future_points INTEGER")
         .expect("migrate a");
     assert!(
         sync::collect_local_changes(&a).expect("collect").is_empty(),
@@ -405,14 +406,261 @@ fn adding_a_nullable_column_emits_no_update_storm() {
     let id = task_ids_on(&a)[0];
     a.connection()
         .execute(
-            "UPDATE tasks SET estimate_minutes = 45 WHERE id = ?1",
+            "UPDATE tasks SET future_points = 45 WHERE id = ?1",
             [id.as_bytes().to_vec()],
         )
         .expect("set estimate");
     let events = sync::collect_local_changes(&a).expect("collect");
     assert_eq!(events.len(), 1);
     match &events[0].event.op {
-        EventOp::Update { fields } => assert_eq!(fields, &vec!["estimate_minutes".to_string()]),
+        EventOp::Update { fields } => assert_eq!(fields, &vec!["future_points".to_string()]),
         other => panic!("expected an update, got {other:?}"),
+    }
+}
+
+#[test]
+fn upgrading_an_older_device_keeps_values_it_carried() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    let task = task_repo::insert(
+        a.connection(),
+        &NewTask {
+            title: "carry me".into(),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("insert");
+    ship(&a, &b);
+    ship(&b, &a);
+
+    // A is on a newer build and sets a column B doesn't have yet.
+    a.connection()
+        .execute_batch("ALTER TABLE tasks ADD COLUMN future_points INTEGER")
+        .expect("migrate a");
+    a.connection()
+        .execute(
+            "UPDATE tasks SET future_points = 8 WHERE id = ?1",
+            [task.id.as_bytes().to_vec()],
+        )
+        .expect("set on a");
+    ship(&a, &b);
+
+    // B last synced on a build that recorded no column baseline. Its
+    // upgrade records one (as `migrations::migrate` does) and then adds the
+    // column, which starts NULL while B's journal holds 8.
+    b.connection()
+        .execute_batch("DELETE FROM sync_state WHERE key LIKE 'known_columns:%'")
+        .expect("old build");
+    sync::record_column_baseline(b.connection()).expect("baseline");
+    b.connection()
+        .execute_batch("ALTER TABLE tasks ADD COLUMN future_points INTEGER")
+        .expect("migrate b");
+    assert!(
+        sync::collect_local_changes(&b)
+            .expect("collect b")
+            .is_empty(),
+        "upgrading must not emit an update that clears the carried value"
+    );
+    let on_b: Option<i64> = b
+        .connection()
+        .query_row(
+            "SELECT future_points FROM tasks WHERE id = ?1",
+            [task.id.as_bytes().to_vec()],
+            |r| r.get(0),
+        )
+        .expect("read b");
+    assert_eq!(on_b, Some(8), "the carried value fills the new column");
+}
+
+#[test]
+fn syncing_an_area_edit_keeps_its_tasks_assigned() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    for v in [&a, &b] {
+        v.connection()
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("fk on");
+    }
+    let area = area_repo::insert(
+        a.connection(),
+        &NewArea {
+            name: "home".into(),
+            color: None,
+            weekly_budget_minutes: None,
+        },
+    )
+    .expect("area");
+    let task = task_repo::insert(
+        a.connection(),
+        &NewTask {
+            title: "fix sink".into(),
+            area_id: Some(area.id),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("task");
+    ship(&a, &b);
+    ship(&b, &a);
+
+    area_repo::update(
+        b.connection(),
+        area.id,
+        &AreaPatch {
+            weekly_budget_minutes: Some(Some(180)),
+            ..AreaPatch::default()
+        },
+    )
+    .expect("budget on b");
+    ship(&b, &a);
+
+    let on_a = task_repo::get_by_id(a.connection(), task.id)
+        .expect("get")
+        .expect("present");
+    assert_eq!(on_a.area_id, Some(area.id), "task must stay in its area");
+    let area_a = area_repo::get_by_id(a.connection(), area.id)
+        .expect("get area")
+        .expect("present");
+    assert_eq!(area_a.weekly_budget_minutes, Some(180));
+    assert!(
+        sync::collect_local_changes(&a)
+            .expect("collect a")
+            .is_empty(),
+        "applying the remote edit must not produce local changes"
+    );
+}
+
+#[test]
+fn estimate_and_area_assignment_sync_between_devices() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    let area = area_repo::insert(
+        a.connection(),
+        &NewArea {
+            name: "work".into(),
+            color: None,
+            weekly_budget_minutes: Some(600),
+        },
+    )
+    .expect("area");
+    let task = task_repo::insert(
+        a.connection(),
+        &NewTask {
+            title: "write spec".into(),
+            estimate_minutes: Some(90),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("task");
+    ship(&a, &b);
+
+    let sid_b = task_repo::get_by_id(b.connection(), task.id)
+        .expect("get")
+        .expect("present")
+        .sid;
+    task_repo::update(
+        b.connection(),
+        sid_b,
+        &TaskPatch {
+            area_id: Some(Some(area.id)),
+            estimate_minutes: Some(Some(120)),
+            ..TaskPatch::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("edit on b");
+    ship(&b, &a);
+
+    let on_a = task_repo::get_by_id(a.connection(), task.id)
+        .expect("get")
+        .expect("present");
+    assert_eq!(on_a.estimate_minutes, Some(120));
+    assert_eq!(on_a.area_id, Some(area.id));
+    let area_b = area_repo::get_by_id(b.connection(), area.id)
+        .expect("get")
+        .expect("present");
+    assert_eq!(area_b.weekly_budget_minutes, Some(600));
+}
+
+#[test]
+fn estimate_budget_and_assignment_survive_reopening_the_vault() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("v.bregavault");
+    let (v, secret_key) = vault::init(&path, b"password").expect("init");
+    let area = area_repo::insert(
+        v.connection(),
+        &NewArea {
+            name: "home".into(),
+            color: None,
+            weekly_budget_minutes: Some(180),
+        },
+    )
+    .expect("area");
+    let task = task_repo::insert(
+        v.connection(),
+        &NewTask {
+            title: "fix sink".into(),
+            area_id: Some(area.id),
+            estimate_minutes: Some(45),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("task");
+    drop(v);
+
+    let v = vault::open(&path, b"password", &secret_key).expect("reopen");
+    let t = task_repo::get_by_id(v.connection(), task.id)
+        .expect("get")
+        .expect("present");
+    assert_eq!((t.estimate_minutes, t.area_id), (Some(45), Some(area.id)));
+    let a = area_repo::get_by_id(v.connection(), area.id)
+        .expect("get")
+        .expect("present");
+    assert_eq!(a.weekly_budget_minutes, Some(180));
+}
+
+#[test]
+fn concurrent_reschedules_on_two_devices_are_both_kept() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let (a, b) = two_devices(dir.path());
+    let task = task_repo::insert(
+        a.connection(),
+        &NewTask {
+            title: "file taxes".into(),
+            scheduled_for: Some("2026-06-01".into()),
+            ..NewTask::default()
+        },
+        &UrgencyConfig::default(),
+    )
+    .expect("insert");
+    ship(&a, &b);
+    ship(&b, &a);
+
+    let move_to = |v: &OpenVault, day: &str| {
+        let sid = task_repo::get_by_id(v.connection(), task.id)
+            .expect("get")
+            .expect("present")
+            .sid;
+        task_repo::update(
+            v.connection(),
+            sid,
+            &TaskPatch {
+                scheduled_for: Some(Some(day.into())),
+                ..TaskPatch::default()
+            },
+            &UrgencyConfig::default(),
+        )
+        .expect("move");
+    };
+    move_to(&a, "2026-06-03");
+    move_to(&b, "2026-06-05");
+    sync_round(&a, &b);
+
+    for v in [&a, &b] {
+        let rows = task_reschedule_repo::list_for_task(v.connection(), task.id).expect("log");
+        assert_eq!(rows.len(), 2, "both devices' moves are kept");
     }
 }

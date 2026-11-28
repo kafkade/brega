@@ -51,6 +51,7 @@ brega-crypto = { workspace = true }
 brega-storage = { workspace = true }
 brega-sync = { workspace = true }
 brega-account = { workspace = true }
+rusqlite = { workspace = true }
 uniffi = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }

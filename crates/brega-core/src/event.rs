@@ -138,6 +138,8 @@ pub enum EntityKind {
     TagLink,
     /// A habit skip/freeze record.
     HabitSkip,
+    /// An append-only record of a task's planned day or due date moving later.
+    TaskReschedule,
 }
 
 impl EntityKind {
@@ -158,6 +160,7 @@ impl EntityKind {
             Self::Tag => "tag",
             Self::TagLink => "tag_link",
             Self::HabitSkip => "habit_skip",
+            Self::TaskReschedule => "task_reschedule",
         }
     }
 }

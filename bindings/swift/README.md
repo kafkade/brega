@@ -74,12 +74,16 @@ The UniFFI facade exposes a `Workspace` object with methods for:
 |-----------------|-----------------------------------------------------------|
 | **Tasks**       | add, get, list, modify, complete, cancel, delete          |
 | **Projects**    | add, get, list                                            |
-| **Areas**       | add, list                                                 |
+| **Areas**       | add, get, list, update (name, color, weekly budget), archive |
 | **Tags**        | list                                                      |
 | **Time blocks** | start, stop, current, resume, list                        |
 | **Focus**       | start, status, complete cycle, skip break, pause, resume, |
 |                 | abort, finish                                             |
 | **Habits**      | add, get, list, log entry, archive                        |
+| **Planning**    | Weekly Review; `parseDurationMinutes` / `formatDurationMinutes` for estimates and budgets |
+
+Build the Weekly Review's week with `BregaReviewWeek.containing(_:calendar:)`, which
+resolves the ISO week's boundaries in the calendar's time zone (DST-safe).
 
 ### Type Mapping
 

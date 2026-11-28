@@ -601,6 +601,7 @@ fn resolve_area(
         &NewArea {
             name: name.to_string(),
             color: None,
+            weekly_budget_minutes: None,
         },
     )?;
     caches.areas.insert(name.to_string(), area.id);

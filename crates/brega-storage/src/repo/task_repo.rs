@@ -11,15 +11,16 @@ use super::{
     parse_timestamp, parse_u32, parse_uuid_blob, uuid_to_blob,
 };
 use crate::Error;
-use crate::repo::{checklist_repo, sid_repo, tag_repo};
+use crate::repo::{checklist_repo, sid_repo, tag_repo, task_reschedule_repo};
 use brega_core::domain::recurrence::RecurrenceSpec;
+use brega_core::domain::reschedule::{RescheduleField, TaskReschedule, is_later_move};
 use brega_core::domain::sid::SidKind;
 use brega_core::domain::task::{NewTask, Priority, Task, TaskPatch, TaskStatus};
 use brega_core::domain::uda::UdaValues;
 use brega_core::domain::urgency::{UrgencyConfig, UrgencyInput, calculate};
 
 const ENTITY_KIND: &str = "task";
-const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, parent_id, start_date, deadline, scheduled_for, recurrence, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
+const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, parent_id, start_date, deadline, scheduled_for, recurrence, priority, estimate_minutes, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
 
 /// Insert a new task row, attach its tags, and return the stored task.
 ///
@@ -33,17 +34,20 @@ pub fn insert(conn: &Connection, input: &NewTask, urgency: &UrgencyConfig) -> Re
     let created_at_text = format_timestamp(created_at)?;
     let status = input.status.unwrap_or(TaskStatus::Inbox);
     let (done_at, cancelled_at) = status_timestamps(None, None, status, created_at);
+    validate_estimate(input.estimate_minutes)?;
 
     conn.execute(
         "INSERT INTO tasks (
              id, sid, title, notes, status, area_id, project_id, heading_id,
              parent_id, start_date, deadline, scheduled_for, recurrence, evening, priority, udas,
-             urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at
+             urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at,
+             estimate_minutes
          )
          VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
              ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-             0.0, ?17, ?18, ?19, ?20, NULL
+             0.0, ?17, ?18, ?19, ?20, NULL,
+             ?21
          )",
         params![
             uuid_to_blob(id),
@@ -66,6 +70,7 @@ pub fn insert(conn: &Connection, input: &NewTask, urgency: &UrgencyConfig) -> Re
             created_at_text,
             done_at.map(format_timestamp).transpose()?,
             cancelled_at.map(format_timestamp).transpose()?,
+            input.estimate_minutes,
         ],
     )?;
 
@@ -229,11 +234,23 @@ pub fn list(conn: &Connection, include_deleted: bool) -> Result<Vec<Task>, Error
 
 /// Apply a patch to an existing task and return the updated row.
 ///
+/// Moving the planned day or due date to a later day appends a record to
+/// the reschedule log. All writes commit together or not at all.
+///
 /// # Errors
 /// Returns [`crate::Error::Sqlite`] on write failures,
 /// [`crate::Error::NotFound`] if the task does not exist, and
 /// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
 pub fn update(
+    conn: &Connection,
+    sid: u32,
+    patch: &TaskPatch,
+    urgency: &UrgencyConfig,
+) -> Result<Task, Error> {
+    super::in_savepoint(conn, || update_unguarded(conn, sid, patch, urgency))
+}
+
+fn update_unguarded(
     conn: &Connection,
     sid: u32,
     patch: &TaskPatch,
@@ -268,6 +285,8 @@ pub fn update(
         .clone()
         .unwrap_or_else(|| existing.scheduled_for.clone());
     let priority = patch.priority.unwrap_or(existing.priority);
+    let estimate_minutes = patch.estimate_minutes.unwrap_or(existing.estimate_minutes);
+    validate_estimate(estimate_minutes)?;
     let evening = patch.evening.unwrap_or(existing.evening);
     let mut udas = existing.udas.clone();
     for (key, value) in &patch.set_udas {
@@ -299,7 +318,8 @@ pub fn update(
              udas = ?12,
              modified_at = ?13,
              done_at = ?14,
-             cancelled_at = ?15
+             cancelled_at = ?15,
+             estimate_minutes = ?17
          WHERE sid = ?16",
         params![
             title,
@@ -318,9 +338,29 @@ pub fn update(
             done_at.map(format_timestamp).transpose()?,
             cancelled_at.map(format_timestamp).transpose()?,
             i64::from(sid),
+            estimate_minutes,
         ],
     )?;
+    record_later_moves(
+        conn,
+        &existing,
+        scheduled_for.as_deref(),
+        deadline.as_deref(),
+        now,
+    )?;
 
+    apply_links_and_urgency(conn, &existing, patch, urgency)?;
+    get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+}
+
+/// Apply a patch's tag and dependency changes, then refresh urgency.
+fn apply_links_and_urgency(
+    conn: &Connection,
+    existing: &Task,
+    patch: &TaskPatch,
+    urgency: &UrgencyConfig,
+) -> Result<(), Error> {
+    let sid = existing.sid;
     for tag_name in &patch.add_tags {
         tag_repo::tag_entity(conn, existing.id, ENTITY_KIND, tag_name)?;
     }
@@ -337,8 +377,7 @@ pub fn update(
     if patch.status.is_some() {
         recalculate_dependents_urgency(conn, existing.id, urgency)?;
     }
-
-    get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+    Ok(())
 }
 
 /// Change a task's status and return the updated row.
@@ -452,6 +491,50 @@ where
     Ok(None)
 }
 
+/// Append a reschedule record for each task date that moved to a later day.
+fn record_later_moves(
+    conn: &Connection,
+    existing: &Task,
+    scheduled_for: Option<&str>,
+    deadline: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<(), Error> {
+    for (field, from, to) in [
+        (
+            RescheduleField::ScheduledFor,
+            existing.scheduled_for.as_deref(),
+            scheduled_for,
+        ),
+        (
+            RescheduleField::Deadline,
+            existing.deadline.as_deref(),
+            deadline,
+        ),
+    ] {
+        if is_later_move(from, to) {
+            task_reschedule_repo::insert(
+                conn,
+                &TaskReschedule {
+                    id: Uuid::now_v7(),
+                    task_id: existing.id,
+                    field,
+                    from_slot: from.map(String::from),
+                    to_slot: to.map(String::from),
+                    created_at: now,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_estimate(estimate_minutes: Option<u32>) -> Result<(), Error> {
+    if estimate_minutes == Some(0) {
+        return Err(Error::InvalidState("estimate must be greater than zero"));
+    }
+    Ok(())
+}
+
 fn read_task_row(conn: &Connection, row: &Row<'_>) -> Result<Task, Error> {
     let id_bytes: Vec<u8> = row.get("id")?;
     let id = parse_uuid_blob(&id_bytes)?;
@@ -482,6 +565,7 @@ fn read_task_row(conn: &Connection, row: &Row<'_>) -> Result<Task, Error> {
         scheduled_for: row.get("scheduled_for")?,
         recurrence: row.get("recurrence")?,
         priority: priority_raw.as_deref().map(parse_priority).transpose()?,
+        estimate_minutes: row.get("estimate_minutes")?,
         evening: parse_bool(evening_raw)?,
         udas: UdaValues::from_json(&udas_raw),
         tags: Vec::new(),
@@ -649,6 +733,7 @@ fn spawn_next_recurrence(
             scheduled_for: None,
             recurrence: existing.recurrence.clone(),
             priority: existing.priority,
+            estimate_minutes: existing.estimate_minutes,
             evening: existing.evening,
             udas: existing.udas.clone(),
             tags: existing.tags.clone(),
@@ -670,10 +755,13 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        add_dependency, get_by_sid, insert, is_blocked, remove_dependency, set_status, update,
+        add_dependency, get_by_id, get_by_sid, insert, is_blocked, remove_dependency, set_status,
+        update,
     };
     use crate::Error;
     use crate::migrations;
+    use crate::repo::task_reschedule_repo;
+    use brega_core::domain::reschedule::RescheduleField;
     use brega_core::domain::urgency::UrgencyConfig;
 
     fn test_conn() -> Connection {
@@ -692,6 +780,117 @@ mod tests {
         };
         task.udas.set("effort", serde_json::json!(3));
         task
+    }
+
+    fn reschedule(conn: &Connection, sid: u32, scheduled: Option<&str>, deadline: Option<&str>) {
+        update(
+            conn,
+            sid,
+            &TaskPatch {
+                scheduled_for: Some(scheduled.map(String::from)),
+                deadline: Some(deadline.map(String::from)),
+                ..TaskPatch::default()
+            },
+            &UrgencyConfig::default(),
+        )
+        .expect("reschedule");
+    }
+
+    #[test]
+    fn only_later_moves_are_logged() {
+        let conn = test_conn();
+        let task = insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert");
+        let log = |c: &Connection| task_reschedule_repo::list_for_task(c, task.id).expect("log");
+
+        reschedule(&conn, task.sid, Some("2026-06-01"), None); // first planning
+        reschedule(&conn, task.sid, Some("2026-05-30"), None); // earlier
+        reschedule(&conn, task.sid, Some("2026-05-30T17:00"), None); // same day
+        assert!(log(&conn).is_empty());
+
+        reschedule(&conn, task.sid, Some("2026-06-02"), None);
+        reschedule(&conn, task.sid, Some("2026-06-05T09:00"), None);
+        let rows = log(&conn);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].from_slot.as_deref(), Some("2026-06-02"));
+        assert_eq!(rows[1].to_slot.as_deref(), Some("2026-06-05T09:00"));
+        assert!(
+            rows.iter()
+                .all(|r| r.field == RescheduleField::ScheduledFor)
+        );
+
+        reschedule(&conn, task.sid, None, None); // clearing is not a later move
+        assert_eq!(log(&conn).len(), 2);
+    }
+
+    #[test]
+    fn moving_both_dates_in_one_save_shares_a_timestamp() {
+        let conn = test_conn();
+        let task = insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert");
+        reschedule(&conn, task.sid, Some("2026-06-01"), Some("2026-06-03"));
+        reschedule(&conn, task.sid, Some("2026-06-02"), Some("2026-06-04"));
+        let rows = task_reschedule_repo::list_for_task(&conn, task.id).expect("log");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].created_at, rows[1].created_at);
+        assert_ne!(rows[0].field, rows[1].field);
+    }
+
+    #[test]
+    fn failed_update_writes_nothing() {
+        let conn = test_conn();
+        let task = insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert");
+        reschedule(&conn, task.sid, Some("2026-06-01"), None);
+        let bad = TaskPatch {
+            scheduled_for: Some(Some("2026-06-09".into())),
+            add_deps: vec![9_999],
+            ..TaskPatch::default()
+        };
+        assert!(update(&conn, task.sid, &bad, &UrgencyConfig::default()).is_err());
+        let after = get_by_id(&conn, task.id).expect("get").expect("present");
+        assert_eq!(after.scheduled_for.as_deref(), Some("2026-06-01"));
+        assert!(
+            task_reschedule_repo::list_for_task(&conn, task.id)
+                .expect("log")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn estimate_is_set_cleared_and_must_be_positive() {
+        let conn = test_conn();
+        let cfg = UrgencyConfig::default();
+        let mut new_task = sample_new_task();
+        new_task.estimate_minutes = Some(90);
+        let task = insert(&conn, &new_task, &cfg).expect("insert");
+        assert_eq!(task.estimate_minutes, Some(90));
+
+        let untouched = update(&conn, task.sid, &TaskPatch::default(), &cfg).expect("noop");
+        assert_eq!(untouched.estimate_minutes, Some(90));
+
+        let cleared = update(
+            &conn,
+            task.sid,
+            &TaskPatch {
+                estimate_minutes: Some(None),
+                ..TaskPatch::default()
+            },
+            &cfg,
+        )
+        .expect("clear");
+        assert_eq!(cleared.estimate_minutes, None);
+
+        let zero = TaskPatch {
+            estimate_minutes: Some(Some(0)),
+            ..TaskPatch::default()
+        };
+        assert!(matches!(
+            update(&conn, task.sid, &zero, &cfg),
+            Err(Error::InvalidState(_))
+        ));
+        new_task.estimate_minutes = Some(0);
+        assert!(matches!(
+            insert(&conn, &new_task, &cfg),
+            Err(Error::InvalidState(_))
+        ));
     }
 
     #[test]

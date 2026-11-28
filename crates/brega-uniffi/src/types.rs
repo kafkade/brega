@@ -124,6 +124,8 @@ pub struct BregaTask {
     pub recurrence: Option<String>,
     /// Priority level.
     pub priority: Option<BregaPriority>,
+    /// Effort estimate in minutes.
+    pub estimate_minutes: Option<u32>,
     /// Whether this is an "evening" task.
     pub evening: bool,
     /// User-defined attributes (JSON object string).
@@ -184,6 +186,8 @@ pub struct BregaArea {
     pub color: Option<String>,
     /// Sort position.
     pub sort_order: i32,
+    /// Weekly time budget in minutes (`None` = no budget).
+    pub weekly_budget_minutes: Option<u32>,
     /// Creation timestamp (RFC 3339).
     pub created_at: String,
     /// Last modification timestamp (RFC 3339).
@@ -457,6 +461,9 @@ pub struct BregaNewTask {
     pub udas: String,
     /// Tags to apply.
     pub tags: Vec<String>,
+    /// Effort estimate in minutes (must be > 0; see `parse_duration_minutes`).
+    #[uniffi(default = None)]
+    pub estimate_minutes: Option<u32>,
 }
 
 /// Patch for modifying an existing task.
@@ -518,6 +525,12 @@ pub struct BregaTaskPatch {
     pub add_deps: Vec<u32>,
     /// Dependency SIDs to remove.
     pub remove_deps: Vec<u32>,
+    /// New effort estimate in minutes (must be > 0).
+    #[uniffi(default = None)]
+    pub estimate_minutes: Option<u32>,
+    /// Clear the effort estimate.
+    #[uniffi(default = false)]
+    pub clear_estimate: bool,
 }
 
 /// Input for creating a new project.
@@ -540,6 +553,30 @@ pub struct BregaNewArea {
     pub name: String,
     /// Display color.
     pub color: Option<String>,
+    /// Weekly time budget in minutes (must be > 0; `None` = no budget).
+    #[uniffi(default = None)]
+    pub weekly_budget_minutes: Option<u32>,
+}
+
+/// Patch for an existing area. `None` leaves a field unchanged; a `clear_*`
+/// flag clears it.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct BregaAreaPatch {
+    /// New name.
+    #[uniffi(default = None)]
+    pub name: Option<String>,
+    /// New display color.
+    #[uniffi(default = None)]
+    pub color: Option<String>,
+    /// Clear the display color.
+    #[uniffi(default = false)]
+    pub clear_color: bool,
+    /// New weekly budget in minutes (must be > 0).
+    #[uniffi(default = None)]
+    pub weekly_budget_minutes: Option<u32>,
+    /// Remove the weekly budget.
+    #[uniffi(default = false)]
+    pub clear_budget: bool,
 }
 
 /// Input for creating a new time block (starts a running timer).

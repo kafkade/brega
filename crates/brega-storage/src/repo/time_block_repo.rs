@@ -300,6 +300,36 @@ pub fn list_range(conn: &Connection, from: &str, to: &str) -> Result<Vec<TimeBlo
     Ok(blocks)
 }
 
+/// List time blocks that may overlap `[from, to)`, including running ones.
+///
+/// The window is widened by a day on each side so rows stored in older
+/// timestamp encodings are not missed; callers clip exactly (the Weekly
+/// Review does).
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on query failures and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn list_overlapping(
+    conn: &Connection,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+) -> Result<Vec<TimeBlock>, Error> {
+    let margin = time::Duration::days(1);
+    let lo = format_timestamp(from - margin)?;
+    let hi = format_timestamp(to + margin)?;
+    let sql = format!(
+        "{SELECT_TIME_BLOCK_SQL} WHERE start_ts < ?2 AND (end_ts IS NULL OR end_ts > ?1)
+         ORDER BY start_ts"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![lo, hi])?;
+    let mut blocks = Vec::new();
+    while let Some(row) = rows.next()? {
+        blocks.push(read_time_block_row(row)?);
+    }
+    Ok(blocks)
+}
+
 /// Resume the most recently stopped time block by creating a new running copy.
 ///
 /// # Errors
@@ -429,7 +459,7 @@ fn parse_block_source(raw: &str) -> Result<BlockSource, Error> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use super::{get_by_sid, insert, stop_at};
+    use super::{get_by_sid, insert, insert_completed, list_overlapping, stop_at};
     use crate::Error;
     use crate::migrations;
     use brega_core::domain::time_block::{BlockSource, NewTimeBlock};
@@ -495,5 +525,47 @@ mod tests {
         let conn = conn();
         let now = OffsetDateTime::now_utc();
         assert!(matches!(stop_at(&conn, 999, now), Err(Error::NotFound)));
+    }
+
+    #[test]
+    fn list_overlapping_finds_long_and_running_blocks() {
+        let conn = conn();
+        let from = OffsetDateTime::from_unix_timestamp(1_780_000_000).unwrap();
+        let to = from + Duration::weeks(1);
+        let long = insert_completed(
+            &conn,
+            &new_block(),
+            from - Duration::days(10),
+            from + Duration::hours(1),
+        )
+        .unwrap();
+        let running = insert(&conn, &new_block()).unwrap();
+        conn.execute(
+            "UPDATE time_blocks SET start_ts = '2000-01-01T00:00:00.000000000Z' WHERE sid = ?1",
+            [running.sid],
+        )
+        .unwrap();
+        let _before = insert_completed(
+            &conn,
+            &new_block(),
+            from - Duration::days(5),
+            from - Duration::days(4),
+        )
+        .unwrap();
+        let _after = insert_completed(
+            &conn,
+            &new_block(),
+            to + Duration::days(3),
+            to + Duration::days(4),
+        )
+        .unwrap();
+
+        let mut sids: Vec<u32> = list_overlapping(&conn, from, to)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.sid)
+            .collect();
+        sids.sort_unstable();
+        assert_eq!(sids, vec![long.sid, running.sid]);
     }
 }

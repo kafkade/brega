@@ -91,6 +91,13 @@ pub const TABLES: &[SyncTable] = &[
         sid: Some(SidKind::Task),
     },
     SyncTable {
+        kind: EntityKind::TaskReschedule,
+        table: "task_reschedules",
+        key: Key::Uuid("id"),
+        skip: &[],
+        sid: None,
+    },
+    SyncTable {
         kind: EntityKind::TagLink,
         table: "entity_tags",
         key: Key::Composite(&["entity_id", "entity_kind", "tag_id"]),

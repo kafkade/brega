@@ -134,25 +134,47 @@ pub fn changed_fields(old: &[(String, Value)], new: &[(String, Value)]) -> Vec<S
 
 // ── Materialization ──────────────────────────────────────────────────
 
-/// Insert or update a row from a decoded column set (full snapshot).
+/// Insert or update a row from a decoded column set.
 ///
-/// For SID-bearing tables the local `sid` is preserved on update and
-/// freshly allocated on insert, so short ids stay device-local.
+/// An existing row is updated in place, so columns absent from `columns`
+/// keep their local values and the row is never deleted and re-inserted
+/// (which would fire `ON DELETE` actions on rows referencing it). For
+/// SID-bearing tables a fresh local `sid` is allocated on insert, so short
+/// ids stay device-local.
 pub fn upsert_row(
     conn: &Connection,
     table: &SyncTable,
     columns: &[(String, Value)],
 ) -> Result<(), Error> {
-    if let Some(sid_kind) = table.sid {
-        if row_exists(conn, table, columns)? {
-            update_row(conn, table, columns)
-        } else {
+    if row_exists(conn, table, columns)? {
+        return update_row(conn, table, columns);
+    }
+    match table.sid {
+        Some(sid_kind) => {
             let sid = sid_repo::next_sid(conn, sid_kind)?;
             insert_row(conn, table, columns, Some(("sid", i64::from(sid))))
         }
-    } else {
-        insert_or_replace_row(conn, table, columns)
+        None => insert_row(conn, table, columns, None),
     }
+}
+
+/// Set one column of the row addressed by `key_columns`, only if it is
+/// currently NULL. Returns whether a row changed.
+pub fn fill_null_column(
+    conn: &Connection,
+    table: &SyncTable,
+    key_columns: &[(String, Value)],
+    column: &str,
+    value: &Value,
+) -> Result<bool, Error> {
+    let (where_sql, mut values) = key_predicate(table, key_columns)?;
+    let idx = values.len() + 1;
+    let sql = format!(
+        "UPDATE {} SET {column} = ?{idx} WHERE {where_sql} AND {column} IS NULL",
+        table.table
+    );
+    values.push(value.clone());
+    Ok(conn.execute(&sql, params_from_iter(values.iter()))? > 0)
 }
 
 /// Delete a row addressed by its decoded key columns.
@@ -206,26 +228,6 @@ fn row_exists(
     let mut stmt = conn.prepare(&sql)?;
     let exists = stmt.exists(params_from_iter(values.iter()))?;
     Ok(exists)
-}
-
-fn insert_or_replace_row(
-    conn: &Connection,
-    table: &SyncTable,
-    columns: &[(String, Value)],
-) -> Result<(), Error> {
-    let names: Vec<&str> = columns.iter().map(|(n, _)| n.as_str()).collect();
-    let placeholders = (1..=names.len())
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "INSERT OR REPLACE INTO {} ({}) VALUES ({placeholders})",
-        table.table,
-        names.join(", "),
-    );
-    let values: Vec<&Value> = columns.iter().map(|(_, v)| v).collect();
-    conn.execute(&sql, params_from_iter(values.iter()))?;
-    Ok(())
 }
 
 fn insert_row(

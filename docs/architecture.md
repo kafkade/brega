@@ -569,7 +569,11 @@ The four domains share IDs, events, and the urgency engine. Key integration poin
 | Project aggregation                                  | `brega project show work.backend` lists tasks + open habits scoped to project + week's time blocks. |
 | Recurring task ↔ Habit promotion                     | `brega task promote-to-habit 42` archives the recurring template and creates a habit with the same cadence; existing instances stay as-is. |
 
-#### 2.5.1 Edge cases
+#### 2.5.1 Weekly Review (v1, R-12)
+
+A pure function in `brega-core` (`domain::review`) reports, per area and for one ISO week in the local time zone: the weekly budget, tracked time (time blocks credited through their task's area, clipped to the week; running blocks end at "now"), planned time (estimates of open tasks whose planned day falls in the week), unestimated, overdue, and slipped tasks (moved to a later day at least twice, from `task_reschedules`), a zero-planned flag, and high-priority tasks with no planned day. "Open" excludes done, cancelled, deleted, and Someday tasks; work without a known area goes to a "No area" row. The app passes the week as two instants resolved with the platform time-zone database (`BregaReviewWeek.containing` in Swift), so DST weeks and skipped midnights are handled outside the core.
+
+#### 2.5.2 Edge cases
 
 - **Deleted recurring task with linked habit**: deleting the template does *not* delete the habit. Habit retains `source_task_id` for provenance.
 - **Habit deleted while focus session credits it**: focus session continues; on completion, the habit credit is silently skipped (logged to `brega doctor` for visibility).
@@ -650,7 +654,8 @@ CREATE TABLE areas (
     sort_order   INTEGER NOT NULL DEFAULT 0,
     archived_at  TEXT,
     created_at   TEXT NOT NULL,
-    modified_at  TEXT NOT NULL
+    modified_at  TEXT NOT NULL,
+    weekly_budget_minutes INTEGER CHECK (weekly_budget_minutes IS NULL OR weekly_budget_minutes > 0)  -- 0017
 );
 
 CREATE TABLE projects (
@@ -707,7 +712,8 @@ CREATE TABLE tasks (
     modified_at     TEXT NOT NULL,
     done_at         TEXT,
     cancelled_at    TEXT,
-    deleted_at      TEXT
+    deleted_at      TEXT,
+    estimate_minutes INTEGER CHECK (estimate_minutes IS NULL OR estimate_minutes > 0)  -- 0016
 );
 CREATE INDEX tasks_status_idx       ON tasks(status) WHERE deleted_at IS NULL;
 CREATE INDEX tasks_project_idx      ON tasks(project_id);
@@ -722,6 +728,19 @@ CREATE TABLE task_dependencies (
     PRIMARY KEY (task_id, depends_on_id)
 );
 CREATE INDEX task_deps_rev_idx ON task_dependencies(depends_on_id);
+
+-- Append-only: one row each time scheduled_for or deadline moves to a later
+-- day (0018). Never updated or deleted; synced as its own entity kind so
+-- reschedules between syncs stay countable. No FK: rows may sync first.
+CREATE TABLE task_reschedules (
+    id          BLOB PRIMARY KEY,
+    task_id     BLOB NOT NULL,
+    field       TEXT NOT NULL CHECK (field IN ('scheduled_for', 'deadline')),
+    from_slot   TEXT,
+    to_slot     TEXT,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX task_reschedules_task_idx ON task_reschedules(task_id);
 
 CREATE TABLE checklist_items (
     id          BLOB PRIMARY KEY,
@@ -936,6 +955,7 @@ Rationale: a separate EAV `uda_values` table would force JOINs on every list que
   - `data.rs` — optional Rust-side data backfill (re-encryption, re-derive caches)
   - `checksum` — sha256 verified at startup
 - On open, core compares `user_version` to highest-known migration; missing migrations run in a single transaction.
+- **Mixed-version sync (R-13):** a device on an older schema applies the columns it knows from a newer device's events and keeps the rest in its sync journal, so its own edits send them back. Before an upgrade runs migrations, the synced tables' column sets are recorded; the next sync fills newly added columns from those journal values instead of emitting updates that clear them. A column absent from the journal and NULL now is unchanged, so adding a column emits no update per row. Existing rows are updated in place, never deleted and re-inserted. New entity kinds additionally need #251 (older builds currently reject unknown kinds).
 - **Backward-compat rule:** within a major version, additive only. Destructive changes require a major bump and an export/re-import migration. The vault format header (§5.2) carries a `min_compatible_version`; older clients refuse to open newer vaults.
 
 ### 3.5 Common-query indexes (rationale)
@@ -1529,6 +1549,7 @@ Resolution is per-`EventOp` and per-`EntityKind`:
 | Concurrent `Delete`s                                     | Idempotent — both apply (no-op the second).                                    |
 | Concurrent `Create` with same `entity_id`                | Impossible by construction (UUIDv7 collisions are negligible); if it occurs, deterministic tie-break by `device_id`, the loser becomes an Update.  |
 | `time_blocks` open-overlap across devices                | Both apply; mark both with virtual tag `+SYNC_OVERLAP` (see §2.3.5).           |
+| `task_reschedules` rows from several devices              | **All apply** — rows are append-only with independent ids; none conflict.      |
 | `focus_sessions` two devices started concurrently        | The one with earlier `started_at` wins; the other is downgraded to `Aborted` with `note: "superseded by sync"`. |
 
 A **conflict log** (queryable via `brega sync conflicts`) surfaces LWW-losers for user review without blocking sync.

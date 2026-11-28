@@ -1,6 +1,7 @@
 //! Repository layer — typed CRUD over `SQLite` tables.
 
 use brega_core::Error as CoreError;
+use rusqlite::Connection;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -21,6 +22,7 @@ pub mod report_repo;
 pub mod sid_repo;
 pub mod tag_repo;
 pub mod task_repo;
+pub mod task_reschedule_repo;
 pub mod time_block_repo;
 pub mod uda_repo;
 
@@ -35,6 +37,25 @@ pub(crate) const fn invalid_encoding() -> Error {
 const TIMESTAMP_FORMAT: &[time::format_description::BorrowedFormatItem<'static>] = time::macros::format_description!(
     "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:9]Z"
 );
+
+/// Run `f` inside a savepoint: all of its writes commit together or none
+/// do. Nests inside an enclosing transaction or savepoint.
+pub(crate) fn in_savepoint<T>(
+    conn: &Connection,
+    f: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    conn.execute_batch("SAVEPOINT brega_repo_op")?;
+    match f() {
+        Ok(v) => {
+            conn.execute_batch("RELEASE brega_repo_op")?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO brega_repo_op; RELEASE brega_repo_op");
+            Err(e)
+        }
+    }
+}
 
 pub(crate) fn format_timestamp(timestamp: OffsetDateTime) -> Result<String, Error> {
     timestamp

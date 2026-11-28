@@ -3259,6 +3259,7 @@ fn run_area_cmd(
             let new_area = brega_core::domain::area::NewArea {
                 name: name.clone(),
                 color: None,
+                weekly_budget_minutes: None,
             };
             let area = brega_storage::repo::area_repo::insert(conn, &new_area)?;
             println!("{}", tr!("area-created", name = area.name.as_str()));

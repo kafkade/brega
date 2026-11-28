@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use brega_core::domain::area::Area;
+use brega_core::domain::area::{Area, AreaPatch};
 use brega_core::domain::focus::{FocusConfig, FocusSession, FocusState};
 use brega_core::domain::habit::{Habit, HabitDirection, HabitEntry};
 use brega_core::domain::project::{Project, ProjectStatus};
@@ -19,9 +19,10 @@ use uuid::Uuid;
 
 use crate::error::BregaError;
 use crate::types::{
-    BregaArea, BregaBlockSource, BregaFocusConfig, BregaFocusSession, BregaFocusState, BregaHabit,
-    BregaHabitDirection, BregaHabitEntry, BregaNewTask, BregaPriority, BregaProject,
-    BregaProjectStatus, BregaTag, BregaTask, BregaTaskPatch, BregaTaskStatus, BregaTimeBlock,
+    BregaArea, BregaAreaPatch, BregaBlockSource, BregaFocusConfig, BregaFocusSession,
+    BregaFocusState, BregaHabit, BregaHabitDirection, BregaHabitEntry, BregaNewTask, BregaPriority,
+    BregaProject, BregaProjectStatus, BregaTag, BregaTask, BregaTaskPatch, BregaTaskStatus,
+    BregaTimeBlock,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -173,6 +174,7 @@ impl From<Task> for BregaTask {
             scheduled_for: t.scheduled_for,
             recurrence: t.recurrence,
             priority: t.priority.map(Into::into),
+            estimate_minutes: t.estimate_minutes,
             evening: t.evening,
             udas: t.udas.to_json(),
             tags: t.tags,
@@ -212,6 +214,7 @@ impl From<Area> for BregaArea {
             name: a.name,
             color: a.color,
             sort_order: a.sort_order,
+            weekly_budget_minutes: a.weekly_budget_minutes,
             created_at: format_ts(a.created_at),
             modified_at: format_ts(a.modified_at),
             archived_at: format_optional_ts(a.archived_at),
@@ -353,6 +356,7 @@ impl BregaNewTask {
             scheduled_for: self.scheduled_for.clone(),
             recurrence: self.recurrence.clone(),
             priority: self.priority.map(Into::into),
+            estimate_minutes: self.estimate_minutes,
             evening: self.evening,
             udas: UdaValues::from_json(&self.udas),
             tags: self.tags.clone(),
@@ -437,6 +441,30 @@ impl BregaTaskPatch {
             remove_tags: self.remove_tags.clone(),
             add_deps: self.add_deps.clone(),
             remove_deps: self.remove_deps.clone(),
+            estimate_minutes: if self.clear_estimate {
+                Some(None)
+            } else {
+                self.estimate_minutes.map(Some)
+            },
         })
+    }
+}
+
+impl BregaAreaPatch {
+    /// Convert to the core `AreaPatch` type.
+    pub(crate) fn to_core(&self) -> AreaPatch {
+        AreaPatch {
+            name: self.name.clone(),
+            color: if self.clear_color {
+                Some(None)
+            } else {
+                self.color.clone().map(Some)
+            },
+            weekly_budget_minutes: if self.clear_budget {
+                Some(None)
+            } else {
+                self.weekly_budget_minutes.map(Some)
+            },
+        }
     }
 }
