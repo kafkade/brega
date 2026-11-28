@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-020](docs/adr/ADR-020-external-calendar-busy-time.md) covers read-only
   busy/free calendar reads.
 
+### Fixed
+
+- **Sync across app versions** (#227, R-13): a device on an older schema now
+  applies the columns it knows from a newer device's changes instead of
+  dropping the whole update as a conflict, and keeps the columns it doesn't
+  know so they survive its own edits. Adding a column in an upgrade no longer
+  re-sends every unchanged row.
+- Lists ordered by time (annotations, time blocks, focus sessions) could show
+  items out of order when a timestamp's fractional seconds ended in zero (most
+  often on Windows); stored timestamps now sort chronologically.
+
 ### Security
 
 - Upgrade bundled SQLite and URL parsing dependencies to address

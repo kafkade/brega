@@ -3,7 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-11-26
 
-> Records decision 3 of [the capacity-planning handoff](../handoff-capacity-planning.md).
+> Records decision 3 of [the capacity-planning handoff](https://github.com/kafkade/brega/blob/ed10ad4/docs/handoff-capacity-planning.md)
+> (removed once its work was tracked in #228–#231, #240, and #246).
 > Narrows the role of external calendars described in
 > [architecture §9.5](../architecture.md#95-caldav-integration): §9.5 treats
 > CalDAV as an optional *outbound/two-way projection* of tasks and time blocks;

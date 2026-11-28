@@ -1,7 +1,7 @@
 # v1 release scope — source of truth
 
-**Status:** Approved 2026-11-26 (owner). Product name **brega** (formerly tock; code renamed, GitHub
-repository rename pending — #226).
+**Status:** Approved 2026-11-26 (owner). Product name **brega** (formerly tock; code and GitHub
+repository renamed in #226).
 
 ## Which document governs
 

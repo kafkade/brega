@@ -6,6 +6,8 @@
 //! produce byte-identical frames for identical logical rows (stable
 //! change detection + dedup).
 
+use std::collections::HashSet;
+
 use rusqlite::Connection;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value;
@@ -29,6 +31,16 @@ pub struct RowSnap {
     pub content: Vec<u8>,
     /// Decoded `(column, value)` pairs (excludes skipped columns).
     pub columns: Vec<(String, Value)>,
+}
+
+/// Names of every column the local schema defines for a table (including
+/// skipped, local-only columns).
+pub fn table_columns(conn: &Connection, table: &SyncTable) -> Result<HashSet<String>, Error> {
+    let mut stmt = conn.prepare("SELECT name FROM pragma_table_info(?1)")?;
+    let names = stmt
+        .query_map([table.table], |r| r.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(names)
 }
 
 /// Snapshot every current row of a table.

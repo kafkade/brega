@@ -27,7 +27,7 @@ may still change) or **possible** (not committed). No dates are implied.
 
 ## Delivery order for v1 (current plan)
 
-1. Rename tock → brega across code, identifiers, and GitHub references (#226; code done, repository rename pending).
+1. Rename tock → brega across code, identifiers, and GitHub references (#226; done).
 2. Sync forward-compat fix (R-13).
 3. Estimate, area budget, reschedule log, Weekly Review core (R-10…R-12).
 4. Vault format v3 with SQLCipher and the iCloud Keychain key model (N-02, N-03).
