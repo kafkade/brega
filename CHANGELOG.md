@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropping the whole update as a conflict, and keeps the columns it doesn't
   know so they survive its own edits. Adding a column in an upgrade no longer
   re-sends every unchanged row.
+- Lists ordered by time (annotations, time blocks, focus sessions) could show
+  items out of order when a timestamp's fractional seconds ended in zero (most
+  often on Windows); stored timestamps now sort chronologically.
 
 ### Security
 
